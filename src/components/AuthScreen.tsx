@@ -10,7 +10,6 @@ export default function AuthScreen({ onAuthenticated }: { onAuthenticated: (acco
   const [form, setForm] = useState({ name: '', phone: '', email: '', password: '', salonId: '' });
   const [salons, setSalons] = useState<SalonOption[]>([]);
   const [busy, setBusy] = useState(false);
-
   const switchMode = (nextMode: 'login' | 'signup') => {
     setMode(nextMode);
     if (nextMode === 'signup') setForm(previous => ({ ...previous, email: '', password: '' }));
@@ -19,7 +18,7 @@ export default function AuthScreen({ onAuthenticated }: { onAuthenticated: (acco
   useEffect(() => { PublicApi.salons().then(setSalons).catch(() => {}); }, []);
 
   const submit = async () => {
-    if (!form.email.trim() || !form.password) { toast('Email and password are required.', 'error'); return; }
+    if (!form.email.trim() || !form.password) { toast('Email or phone and password/PIN are required.', 'error'); return; }
     if (mode === 'signup' && (!form.salonId || !form.name.trim() || !form.phone.trim())) { toast('Choose a salon and complete your client details.', 'error'); return; }
     setBusy(true);
     try {
@@ -61,8 +60,8 @@ export default function AuthScreen({ onAuthenticated }: { onAuthenticated: (acco
               <Field label="Full name" htmlFor="auth-name"><Input id="auth-name" autoComplete="name" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} /></Field>
               <Field label="Phone" htmlFor="auth-phone"><Input id="auth-phone" autoComplete="tel" value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} /></Field>
             </>}
-            <Field label="Email" htmlFor="auth-email"><Input id="auth-email" autoComplete={mode === 'signup' ? 'email' : 'username'} type="email" value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} /></Field>
-            <Field label="Password" htmlFor="auth-password"><Input id="auth-password" autoComplete={mode === 'signup' ? 'new-password' : 'current-password'} type="password" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} /></Field>
+            <Field label={mode === 'login' ? 'Email or phone' : 'Email'} htmlFor="auth-email"><Input id="auth-email" autoComplete={mode === 'signup' ? 'email' : 'username'} type={mode === 'signup' ? 'email' : 'text'} value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} /></Field>
+            <Field label="Password" htmlFor="auth-password"><Input id="auth-password" autoComplete={mode === 'signup' ? 'new-password' : 'current-password'} type="text" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} /></Field>
             <Button className="w-full" onClick={submit} disabled={busy}>{busy ? 'Please wait...' : mode === 'login' ? 'Log in' : 'Create client account'}</Button>
           </div>
           <p className="text-xs text-slate-200 border-t border-white/10 mt-6 pt-5">Salon and employee accounts are created by the platform administrator or salon owner.</p>

@@ -40,7 +40,7 @@ const TABS: { key: TabKey; label: string; icon: any; roles: Role[] }[] = [
   { key: 'ai', label: 'AI Assistant', icon: Sparkles, roles: ['owner'] },
   { key: 'booking', label: 'Book Appointment', icon: Calendar, roles: ['customer'] },
   { key: 'logs', label: 'Audit Logs', icon: ClipboardList, roles: ['owner'] },
-  { key: 'admin', label: 'Admin', icon: Building2, roles: ['owner'] },
+  { key: 'admin', label: 'Admin', icon: Building2, roles: ['admin'] },
 ];
 
 function normalizeRole(role: unknown): Role {

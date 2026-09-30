@@ -103,6 +103,18 @@ export const db = {
     await sql`DELETE FROM app_records WHERE collection = ${collection} AND tenant_id = ${context?.tenantId || null} AND id = ANY(${ids})`;
     return true;
   },
+  async purgeSalon(salonId: string) {
+    await init();
+    await sql.transaction([
+      sql`DROP TRIGGER IF EXISTS app_records_no_delete ON app_records`,
+      sql`DELETE FROM app_records WHERE collection = 'sessions' AND record->>'accountId' IN (SELECT id FROM app_records WHERE collection = 'accounts' AND tenant_id = ${salonId})`,
+      sql`DELETE FROM app_records WHERE tenant_id = ${salonId}`,
+      sql`DELETE FROM app_records WHERE collection = 'branches' AND record->>'salonId' = ${salonId}`,
+      sql`DELETE FROM app_records WHERE collection = 'accounts' AND tenant_id = ${salonId}`,
+      sql`DELETE FROM app_records WHERE collection = 'salons' AND id = ${salonId}`,
+      sql`CREATE TRIGGER app_records_no_delete BEFORE DELETE ON app_records FOR EACH ROW EXECUTE FUNCTION prevent_safigroom_record_delete()`,
+    ]);
+  },
 };
 
 export function json(body: unknown, status = 200) {

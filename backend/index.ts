@@ -1,4 +1,4 @@
-import { router, json, error, db, ai, storage, currentContext } from './runtime';
+import { router, json, error, db, ai, storage, currentContext, withRequestContext } from './runtime';
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 
 const DAY = 24 * 3600 * 1000;
@@ -15,6 +15,7 @@ function passwordMatches(password: string, stored: string) {
 }
 
 function sessionToken() { return randomBytes(32).toString('hex'); }
+function normalizePhone(phone: unknown) { return String(phone || '').replace(/[\s()-]/g, ''); }
 function normalizeRole(role: unknown): string {
   const value = String(role || '').trim().toLowerCase();
   if (['owner', 'manager', 'receptionist', 'barber', 'customer', 'admin'].includes(value)) return value;
@@ -332,12 +333,14 @@ export const handler = router({
     return json({ items: (items as any[]).filter(branch => branch.salonId === salonId && branch.status === 'active') });
   }],
   'POST /api/auth/login': [async ({ body }) => {
-    const email = String(body?.email || '').trim().toLowerCase();
+    const identifier = String(body?.identifier || body?.email || '').trim();
     const password = String(body?.password || '');
-    if (!email || !password) return error('Email and password are required', 400);
+    if (!identifier || !password) return error('Email or phone and password/PIN are required', 400);
     const { items } = await db.list('accounts', { limit: 5000 });
-    const account = (items as any[]).find(item => String(item.email).toLowerCase() === email);
-    if (!account || account.status !== 'active' || !passwordMatches(password, account.passwordHash)) return error('Invalid email or password', 401);
+    const email = identifier.toLowerCase();
+    const phone = normalizePhone(identifier);
+    const account = (items as any[]).find(item => String(item.email || '').toLowerCase() === email || (phone && normalizePhone(item.phone) === phone));
+    if (!account || account.status !== 'active' || !passwordMatches(password, account.passwordHash)) return error('Invalid email/phone or password/PIN', 401);
     const token = sessionToken();
     await db.add('sessions', [sessionRecord(token, account)]);
     return json({ token, account: { id: account.id, name: account.name, email: account.email, role: normalizeRole(account.role), salonId: account.tenantId, salonName: account.salonName, branchId: account.branchId } });
@@ -404,6 +407,37 @@ export const handler = router({
     await notifyCustomer(ownerEmail, `Your SafiGroom owner account for ${name}`, `Salon: ${name}\nLogin email: ${ownerEmail}\nTemporary password: ${ownerPassword}\nPlease change the password after signing in.`, accountId);
     return json({ salonId, branchId, accountId, ownerEmail });
   }],
+  'DELETE /api/admin/salons/:id': [async ({ params }) => {
+    requireAdmin();
+    const [salon] = await db.get('salons', [params.id]);
+    if (!salon) return error('Salon not found', 404);
+    await db.purgeSalon(salon.id);
+    return json({ ok: true, salonId: salon.id, message: 'Salon and all linked records were permanently deleted.' });
+  }],
+  'POST /api/admin/demo-data': [async () => {
+    requireAdmin();
+    const { items: salons } = await db.list('salons', { limit: 5000 });
+    let salon = (salons as any[]).find(item => item.name === 'SafiGroom Demo Salon');
+    let created = false;
+    if (!salon) {
+      const salonId = `salon-demo-${randomBytes(6).toString('hex')}`;
+      const branchId = `${salonId}-main`;
+      const accountId = `account-demo-${randomBytes(6).toString('hex')}`;
+      salon = { id: salonId, name: 'SafiGroom Demo Salon', status: 'active', createdAt: Date.now() };
+      await db.add('salons', [salon]);
+      await db.add('branches', [{ id: branchId, salonId, name: 'Nakuru CBD', status: 'active', createdAt: Date.now() }]);
+      await db.add('accounts', [{ id: accountId, tenantId: salonId, salonName: salon.name, branchId, name: 'Demo Owner', email: 'owner@safigroom.demo', phone: '+254700000001', role: 'owner', status: 'active', passwordHash: passwordHash('DemoOwner123!'), createdAt: Date.now() }]);
+      created = true;
+      salon = { ...salon, branchId };
+    }
+    const [branch] = await db.get('branches', [salon.branchId || `${salon.id}-main`]);
+    if (!branch) return error('Demo salon branch is missing', 500);
+    const context = { accountId: 'account-demo-seeder', tenantId: salon.id, salonName: salon.name, branchId: branch.id, role: 'owner', name: 'Demo Seeder' };
+    const existingStaff = await withRequestContext(context, () => db.list('staff', { limit: 1 }));
+    if (existingStaff.items.length) return json({ created: false, alreadyLoaded: true, salonId: salon.id, message: 'Demo data is already loaded.' });
+    await withRequestContext(context, () => seedDemoData());
+    return json({ created, alreadyLoaded: false, salonId: salon.id, ownerEmail: 'owner@safigroom.demo', ownerPassword: 'DemoOwner123!', message: 'Demo data loaded across all app areas.' });
+  }],
   'POST /api/admin/branches': [async ({ body }) => {
     requireAdmin();
     const salonId = String(body?.salonId || '');
@@ -453,13 +487,18 @@ export const handler = router({
     const { items: branches } = await db.list('branches', { limit: 5000 });
     const branch = (branches as any[]).find(item => item.id === branchId && item.salonId === context?.tenantId && item.status === 'active');
     if (!branch) return error('Choose a valid branch for this staff member', 400);
+    const staffPhone = normalizePhone(b.phone);
+    const staffPin = String(b.pin || '');
+    if (!staffPhone) return error('A phone number is required for the staff login', 400);
+    if (!/^\d{4}$/.test(staffPin)) return error('Staff PIN must be exactly 4 digits', 400);
     const [id] = await db.add('staff', [{ name: b.name, role: b.role || 'Staff', specialties: b.specialties || [], branch: branch.name, branchId: branch.id, branchName: branch.name, chair: b.chair || '', phone: b.phone || '', accountEmail: b.accountEmail || '', accountStatus: b.accountStatus || 'pending', employmentStatus: 'active', commissionPct: 40, status: b.status || 'available' }]);
     if (!id) return error('Failed to add staff', 500);
     await audit('created', 'staff', { id, name: b.name, role: b.role || 'Staff', accountEmail: b.accountEmail || '', commissionPct: 40 }, b.actor || 'owner');
-    if (b.accountEmail && b.password && currentContext()) {
+    if (staffPhone && staffPin && currentContext()) {
       const context = currentContext()!;
-      await db.add('accounts', [{ id: `account-${randomBytes(8).toString('hex')}`, tenantId: context.tenantId, salonName: context.salonName, branchId: branch.id, name: b.name, email: String(b.accountEmail).toLowerCase(), phone: b.phone || '', role: b.role || 'barber', status: 'active', passwordHash: passwordHash(b.password), staffId: id, createdAt: Date.now() }]);
-      await notifyEmployee({ id, name: b.name, accountEmail: b.accountEmail }, 'active', b.password);
+      const { items: accounts } = await db.list('accounts', { limit: 5000 });
+      if ((accounts as any[]).some(account => normalizePhone(account.phone) === staffPhone)) return error('An account with that phone number already exists', 409);
+      await db.add('accounts', [{ id: `account-${randomBytes(8).toString('hex')}`, tenantId: context.tenantId, salonName: context.salonName, branchId: branch.id, name: b.name, email: '', phone: staffPhone, role: b.role || 'barber', status: 'active', passwordHash: passwordHash(staffPin), staffId: id, createdAt: Date.now() }]);
     }
     return json({ id });
   }],

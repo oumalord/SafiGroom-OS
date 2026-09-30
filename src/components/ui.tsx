@@ -47,7 +47,7 @@ export function Field({ label, htmlFor, error, children, hint }: { label: string
 }
 
 export function Input(props: InputHTMLAttributes<HTMLInputElement>) {
-  return <input {...props} className={`w-full rounded-xl border border-black/10 bg-white px-3.5 py-2.5 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-[#2F6BFF] ${props.className || ''}`} />;
+  return <input {...props} className={`w-full rounded-xl border border-black/10 bg-white px-3.5 py-2.5 text-sm text-[#1D1D1F] placeholder:text-[#6E6E73] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#2F6BFF] ${props.className || ''}`} />;
 }
 
 export function Select(props: SelectHTMLAttributes<HTMLSelectElement>) {

@@ -45,8 +45,8 @@ function invalidate(prefix: string) {
 export const seed = () => api.post('/api/seed');
 
 export const AuthApi = {
-  login: async (email: string, password: string) => {
-    const result = await api.post('/api/auth/login', { email, password });
+  login: async (identifier: string, password: string) => {
+    const result = await api.post('/api/auth/login', { identifier, password });
     window.localStorage.setItem('safigroom_session', result.data.token);
     window.localStorage.setItem('safigroom_account', JSON.stringify(result.data.account));
     if (result.data.account.branchId) window.localStorage.setItem('safigroom_selected_branch', result.data.account.branchId);
@@ -77,6 +77,8 @@ export const BranchesApi = {
 export const AdminApi = {
   directory: () => api.get('/api/admin/directory').then(r => r.data),
   createSalon: (payload: unknown) => api.post('/api/admin/salons', payload),
+  loadDemoData: () => api.post('/api/admin/demo-data'),
+  deleteSalon: (salonId: string) => api.delete(`/api/admin/salons/${salonId}`),
   createBranch: (payload: unknown) => api.post('/api/admin/branches', payload),
   resetPassword: (accountId: string, newPassword: string) => api.post(`/api/admin/accounts/${accountId}/reset-password`, { newPassword }),
 };
