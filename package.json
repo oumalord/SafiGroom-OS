@@ -11,7 +11,7 @@
         "db:migrate-payment-methods": "tsx database/migrate-payment-methods.ts",
         "db:clone-branch": "tsx database/clone-branch-data.ts",
         "db:purge-demo": "tsx database/purge-demo.ts",
-        "build": "vite build",
+        "build": "node ./node_modules/vite/bin/vite.js build",
         "preview": "vite preview"
     },
     "dependencies": {
