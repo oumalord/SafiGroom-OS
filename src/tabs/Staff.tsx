@@ -10,6 +10,8 @@ function StaffTab({ role = 'owner' }: { role?: Role }) {
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [staffCredentialsUnlocked, setStaffCredentialsUnlocked] = useState(false);
+  const [formError, setFormError] = useState('');
 
   const load = () => { StaffApi.list().then(setStaff).catch(() => toast('Could not load staff.', 'error')).finally(() => setLoading(false)); };
   useEffect(load, []);
@@ -25,19 +27,21 @@ function StaffTab({ role = 'owner' }: { role?: Role }) {
 
   const addStaff = async (submitted: { name: string; role: string; chair: string; phone: string; pin: string; branchId: string }) => {
     if (saving) return;
-    if (!submitted.name.trim()) { toast('Name is required.', 'error'); return; }
-    if (!submitted.phone.trim()) { toast('Enter a phone number for the staff login.', 'error'); return; }
-    if (!/^\d{4}$/.test(submitted.pin)) { toast('Enter a 4-digit staff PIN.', 'error'); return; }
-    if (!submitted.branchId) { toast('Choose a branch for this staff member.', 'error'); return; }
+    if (!submitted.name.trim()) { setFormError('Name is required.'); return; }
+    if (!submitted.phone.trim()) { setFormError('Enter a phone number for the staff login.'); return; }
+    if (!/^\d{4}$/.test(submitted.pin)) { setFormError('Enter a 4-digit staff PIN.'); return; }
+    if (!submitted.branchId) { setFormError('Choose a branch for this staff member.'); return; }
+    setFormError('');
     setSaving(true);
     try {
       await StaffApi.create({ ...submitted, accountStatus: 'active', specialties: [], status: 'available' });
       toast('Staff member and worker account created.', 'success');
       setOpen(false);
+      setStaffCredentialsUnlocked(false);
       setForm({ name: '', role: 'Barber', chair: '', phone: '', pin: '', branchId: branches[0]?.id || '' });
       load();
     } catch (cause) {
-      toast(cause instanceof Error ? cause.message : 'Could not add staff. Please check the details and try again.', 'error');
+      setFormError(cause instanceof Error ? cause.message : 'Could not add staff. Please check the details and try again.');
     } finally {
       setSaving(false);
     }
@@ -76,7 +80,7 @@ function StaffTab({ role = 'owner' }: { role?: Role }) {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div><h1 className="text-2xl font-semibold tracking-tight">Staff & Chairs</h1><p className="text-sm text-[#6E6E73]">Manage your team and station availability.</p></div>
-        {canManageStaff && <Button onClick={() => setOpen(true)}><Plus size={16} aria-hidden="true" />Add Staff</Button>}
+        {canManageStaff && <Button onClick={() => { setForm({ name: '', role: 'Barber', chair: '', phone: '', pin: '', branchId: branches[0]?.id || '' }); setFormError(''); setStaffCredentialsUnlocked(false); setOpen(true); }}><Plus size={16} aria-hidden="true" />Add Staff</Button>}
       </div>
 
       <div>
@@ -123,7 +127,7 @@ function StaffTab({ role = 'owner' }: { role?: Role }) {
 
       {open && (
         <Modal title="Add Staff Member" onClose={() => setOpen(false)} footer={<>
-          <Button variant="secondary" onClick={() => setOpen(false)}>Cancel</Button>
+          <Button variant="secondary" onClick={() => { setOpen(false); setStaffCredentialsUnlocked(false); }}>Cancel</Button>
           <Button type="submit" form="staff-create-form" disabled={saving}>{saving ? 'Adding…' : 'Add Staff'}</Button>
         </>}>
           <form id="staff-create-form" autoComplete="off" onSubmit={event => {
@@ -149,8 +153,9 @@ function StaffTab({ role = 'owner' }: { role?: Role }) {
             </Field>
             <Field label="Chair / Station" htmlFor="s-chair"><Input id="s-chair" name="new-staff-chair" autoComplete="off" value={form.chair} onChange={e => setForm(f => ({ ...f, chair: e.target.value }))} placeholder="e.g. Chair 3" /></Field>
             <Field label="Branch" htmlFor="s-branch"><Select id="s-branch" name="new-staff-branch" autoComplete="off" value={form.branchId} onChange={e => setForm(f => ({ ...f, branchId: e.target.value }))}>{branches.map(branch => <option key={branch.id} value={branch.id}>{branch.name}</option>)}</Select></Field>
-            <Field label="Login phone number" htmlFor="s-phone"><Input id="s-phone" name="new-staff-login-phone" type="tel" inputMode="tel" autoComplete="new-password" value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} placeholder="+254…" /></Field>
-            <Field label="4-digit login PIN" htmlFor="s-account-pin"><Input id="s-account-pin" name="new-staff-login-pin" inputMode="numeric" maxLength={4} type="password" autoComplete="new-password" value={form.pin} onChange={e => setForm(f => ({ ...f, pin: e.target.value.replace(/\D/g, '').slice(0, 4) }))} placeholder="4-digit PIN" /></Field>
+            <Field label="Login phone number" htmlFor="s-phone"><Input id="s-phone" name="new-staff-login-phone" type="tel" inputMode="tel" autoComplete="off" readOnly={!staffCredentialsUnlocked} onFocus={() => setStaffCredentialsUnlocked(true)} value={form.phone} onChange={e => { setForm(f => ({ ...f, phone: e.target.value })); setFormError(''); }} placeholder="+254…" /></Field>
+            <Field label="4-digit login PIN" htmlFor="s-account-pin"><Input id="s-account-pin" name="new-staff-login-pin" inputMode="numeric" maxLength={4} type="password" autoComplete="new-password" readOnly={!staffCredentialsUnlocked} onFocus={() => setStaffCredentialsUnlocked(true)} value={form.pin} onChange={e => { setForm(f => ({ ...f, pin: e.target.value.replace(/\D/g, '').slice(0, 4) })); setFormError(''); }} placeholder="4-digit PIN" /></Field>
+            {formError && <p className="rounded-xl bg-[#FF3B30]/10 px-3 py-2 text-sm text-[#b0201a]" role="alert">{formError}</p>}
             <p className="text-sm rounded-xl bg-[#0071e3]/10 text-[#0058b0] px-3 py-2">Compensation is fixed at 40% of completed service work.</p>
           </form>
         </Modal>
