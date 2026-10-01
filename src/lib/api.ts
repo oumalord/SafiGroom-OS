@@ -161,7 +161,7 @@ export const AiApi = {
 
 export const MessagesApi = {
   list: (channel: ChatChannel) => api.get(`/api/messages?channel=${encodeURIComponent(channel)}`).then(r => r.data.items as ChatMessage[]),
-  send: (payload: { channel: ChatChannel; senderName: string; senderRole: string; text: string }) => api.post('/api/messages', payload),
+  send: (payload: { channel: ChatChannel; text: string }) => api.post('/api/messages', payload),
 };
 
 function csvCell(v: string | number): string {

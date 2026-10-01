@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Home, Calendar, Users, Scissors, Contact, ShoppingCart, Package, DollarSign, Sparkles, Menu, X, Tag, BarChart3, CreditCard, Percent, ClipboardList, Building2 } from 'lucide-react';
+import { Home, Calendar, Users, Scissors, Contact, ShoppingCart, Package, DollarSign, Sparkles, Menu, X, Tag, BarChart3, CreditCard, Percent, ClipboardList, Building2, MessageSquare } from 'lucide-react';
 import { AuthApi, BranchesApi } from './lib/api';
 import { ToastHost, toast } from './components/ui';
 import type { Branch, Role } from './types';
@@ -21,6 +21,7 @@ import AuditLogs from './tabs/AuditLogs';
 import CustomerDashboard from './tabs/CustomerDashboard';
 import AuthScreen from './components/AuthScreen';
 import Admin from './tabs/Admin';
+import Messages from './tabs/Messages';
 
 type TabKey = 'dashboard' | 'appointments' | 'queue' | 'messages' | 'staff' | 'customers' | 'pos' | 'inventory' | 'services' | 'memberships' | 'promotions' | 'reports' | 'finance' | 'ai' | 'booking' | 'logs' | 'admin';
 
@@ -28,6 +29,7 @@ const TABS: { key: TabKey; label: string; icon: any; roles: Role[] }[] = [
   { key: 'dashboard', label: 'Dashboard', icon: Home, roles: ['owner', 'customer'] },
   { key: 'appointments', label: 'Appointments', icon: Calendar, roles: ['owner', 'manager', 'receptionist', 'barber'] },
   { key: 'queue', label: 'Queue', icon: Users, roles: ['owner', 'manager', 'receptionist', 'barber'] },
+  { key: 'messages', label: 'Messages', icon: MessageSquare, roles: ['owner', 'manager', 'receptionist', 'barber'] },
   { key: 'staff', label: 'Staff & Chairs', icon: Scissors, roles: ['owner', 'manager', 'receptionist'] },
   { key: 'services', label: 'Services', icon: Tag, roles: ['owner', 'manager', 'receptionist'] },
   { key: 'memberships', label: 'Memberships', icon: CreditCard, roles: ['owner'] },
@@ -215,6 +217,7 @@ function App() {
                 {tab === 'dashboard' && effectiveRole === 'customer' && <CustomerDashboard onBook={() => setTab('booking')} />}
                 {tab === 'appointments' && <Appointments role={effectiveRole} />}
                 {tab === 'queue' && <Queue />}
+                {tab === 'messages' && <Messages role={effectiveRole} accountId={account.id} />}
                 {tab === 'staff' && <StaffTab role={effectiveRole} />}
                 {tab === 'services' && <Services />}
                 {tab === 'memberships' && <Memberships />}

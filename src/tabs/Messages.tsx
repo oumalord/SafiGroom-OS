@@ -1,90 +1,123 @@
 import { useEffect, useRef, useState } from 'react';
-import { MessageSquare, Send, ShieldCheck } from 'lucide-react';
-import { Card, Select, Input, Button, LoadingState } from '../components/ui';
-import { MessagesApi, StaffApi } from '../lib/api';
-import type { ChatChannel, ChatMessage, Role, Staff } from '../types';
+import { LockKeyhole, MessageSquare, Send, ShieldCheck } from 'lucide-react';
+import { Button, Card, LoadingState, Textarea, toast } from '../components/ui';
+import { MessagesApi } from '../lib/api';
+import type { ChatChannel, ChatMessage, Role } from '../types';
 
-function Messages({ role }: { role: Role }) {
+function roleLabel(role: string) {
+  if (role === 'owner') return 'Owner';
+  if (role === 'manager') return 'Manager';
+  if (role === 'receptionist') return 'Reception';
+  if (role === 'barber') return 'Staff';
+  return role;
+}
+
+function Messages({ role, accountId }: { role: Role; accountId: string }) {
   const [channel, setChannel] = useState<ChatChannel>('team');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loading, setLoading] = useState(true);
+  const [sending, setSending] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [text, setText] = useState('');
-  const [staff, setStaff] = useState<Staff[]>([]);
-  const [asStaffId, setAsStaffId] = useState('');
   const endRef = useRef<HTMLDivElement>(null);
-
   const canSeeManagement = role === 'owner' || role === 'receptionist';
-
-  useEffect(() => { if (role === 'barber') StaffApi.list().then(setStaff); }, [role]);
-  useEffect(() => { if (!canSeeManagement && channel === 'management') setChannel('team'); }, [role, canSeeManagement, channel]);
 
   useEffect(() => {
     let alive = true;
     setLoading(true);
-    const load = () => { MessagesApi.list(channel).then(m => { if (alive) setMessages(m); }).catch(() => {}).finally(() => { if (alive) setLoading(false); }); };
-    load();
-    const id = setInterval(load, 4000);
-    return () => { alive = false; clearInterval(id); };
+    setLoadFailed(false);
+    const load = async () => {
+      try {
+        const loaded = await MessagesApi.list(channel);
+        if (alive) setMessages(loaded);
+      } catch {
+        if (alive) setLoadFailed(true);
+      } finally {
+        if (alive) setLoading(false);
+      }
+    };
+    void load();
+    const id = window.setInterval(() => { void load(); }, 4000);
+    return () => { alive = false; window.clearInterval(id); };
   }, [channel]);
 
-  useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
-
-  const senderName = role === 'owner' ? 'Business Owner' : role === 'receptionist' ? 'Front Desk (Receptionist)' : (staff.find(s => s.id === asStaffId)?.name || '');
+  useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages.length]);
 
   const send = async () => {
-    if (!text.trim()) return;
-    if (role === 'barber' && !asStaffId) return;
-    await MessagesApi.send({ channel, senderName, senderRole: role, text: text.trim() });
-    setText('');
-    MessagesApi.list(channel).then(setMessages);
+    const trimmed = text.trim();
+    if (!trimmed || sending) return;
+    setSending(true);
+    try {
+      await MessagesApi.send({ channel, text: trimmed });
+      setText('');
+      setLoadFailed(false);
+      setMessages(await MessagesApi.list(channel));
+    } catch (cause) {
+      toast(cause instanceof Error ? cause.message : 'Message could not be sent. Please try again.', 'error');
+    } finally {
+      setSending(false);
+    }
   };
 
   return (
-    <div className="space-y-6 max-w-3xl">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight flex items-center gap-2"><MessageSquare size={20} aria-hidden="true" />Team Messages</h1>
-        <p className="text-sm text-[#6E6E73]">Chat with your team, updated in real time.</p>
+    <div className="mx-auto max-w-5xl space-y-5">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <p className="mb-1 text-xs font-semibold uppercase tracking-[0.16em] text-[#2F6BFF]">Team workspace</p>
+          <h1 className="flex items-center gap-2 text-2xl font-semibold tracking-tight"><MessageSquare size={21} aria-hidden="true" />Messages</h1>
+          <p className="mt-1 text-sm text-[#6E6E73]">Quick updates and coordination between your team, reception, and the owner.</p>
+        </div>
+        <span className="inline-flex items-center gap-1.5 rounded-full bg-[#34C759]/10 px-3 py-1.5 text-xs font-medium text-[#1c7c34]"><span className="h-1.5 w-1.5 rounded-full bg-[#34C759]" />Team chat active</span>
       </div>
 
-      <div className="flex flex-wrap items-center gap-3">
-        <div className="flex gap-1 bg-black/5 rounded-full p-1 w-fit" role="group" aria-label="Channel">
-          <button onClick={() => setChannel('team')} aria-pressed={channel === 'team'} className={`px-4 py-1.5 text-sm rounded-full font-medium ${channel === 'team' ? 'bg-white shadow-sm' : 'text-[#6E6E73]'}`}>Team Chat</button>
-          {canSeeManagement && (
-            <button onClick={() => setChannel('management')} aria-pressed={channel === 'management'} className={`px-4 py-1.5 text-sm rounded-full font-medium flex items-center gap-1 ${channel === 'management' ? 'bg-white shadow-sm' : 'text-[#6E6E73]'}`}><ShieldCheck size={13} aria-hidden="true" />Management</button>
+      <Card className="overflow-hidden">
+        <div className="flex flex-col gap-4 border-b border-black/5 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
+          <div className="flex items-center gap-3">
+            <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-gradient-to-br from-[#2F6BFF]/10 to-[#00A6D6]/15 text-[#2F6BFF]">
+              {channel === 'management' ? <ShieldCheck size={20} aria-hidden="true" /> : <MessageSquare size={20} aria-hidden="true" />}
+            </div>
+            <div>
+              <h2 className="font-semibold">{channel === 'management' ? 'Management' : 'Team Chat'}</h2>
+              <p className="text-xs text-[#6E6E73]">{channel === 'management' ? 'A private room for the owner and reception.' : 'Shared with staff, reception, managers, and the owner.'}</p>
+            </div>
+          </div>
+          <div className="flex w-fit gap-1 rounded-full bg-black/5 p-1" role="group" aria-label="Message channel">
+            <button type="button" onClick={() => setChannel('team')} aria-pressed={channel === 'team'} className={`rounded-full px-4 py-2 text-sm font-medium transition-colors ${channel === 'team' ? 'bg-white text-[#1D1D1F] shadow-sm' : 'text-[#6E6E73] hover:text-[#1D1D1F]'}`}>Team</button>
+            {canSeeManagement && <button type="button" onClick={() => setChannel('management')} aria-pressed={channel === 'management'} className={`inline-flex items-center gap-1.5 rounded-full px-4 py-2 text-sm font-medium transition-colors ${channel === 'management' ? 'bg-white text-[#1D1D1F] shadow-sm' : 'text-[#6E6E73] hover:text-[#1D1D1F]'}`}><LockKeyhole size={13} aria-hidden="true" />Management</button>}
+          </div>
+        </div>
+
+        {channel === 'management' && <div className="flex items-center gap-2 bg-[#2F6BFF]/[0.04] px-4 py-2.5 text-xs text-[#52627a] sm:px-6"><LockKeyhole size={13} aria-hidden="true" />Only the owner and receptionist can view or send messages here.</div>}
+
+        <div className="bg-[#FAFAFC] px-3 py-4 sm:px-6 sm:py-5">
+          {loadFailed && <p className="mb-3 rounded-xl bg-[#FF3B30]/[0.08] px-3 py-2 text-xs text-[#b0201a]" role="alert">Could not refresh messages. Check your connection; we will keep trying.</p>}
+          {loading ? <LoadingState label="Loading conversation…" /> : (
+            <div className="flex min-h-[320px] max-h-[58vh] flex-col gap-4 overflow-y-auto px-1 py-2" role="log" aria-label={`${channel === 'management' ? 'Management' : 'Team'} messages`} aria-live="polite">
+              {messages.length === 0 && <div className="m-auto max-w-xs py-12 text-center"><div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-white text-[#2F6BFF] shadow-sm"><MessageSquare size={21} aria-hidden="true" /></div><p className="font-medium">Start the conversation</p><p className="mt-1 text-sm text-[#6E6E73]">Send the first update to your team.</p></div>}
+              {messages.map(message => {
+                const ownMessage = message.senderId === accountId;
+                return (
+                  <div key={message.id} className={`flex ${ownMessage ? 'justify-end' : 'justify-start'}`}>
+                    <div className={`max-w-[88%] sm:max-w-[75%] ${ownMessage ? 'items-end' : 'items-start'} flex flex-col`}>
+                      <div className={`mb-1 flex items-baseline gap-2 px-1 ${ownMessage ? 'flex-row-reverse' : ''}`}>
+                        <span className="text-xs font-semibold text-[#30343b]">{ownMessage ? 'You' : message.senderName}</span>
+                        <span className="text-[10px] text-[#8b8f98]">{roleLabel(message.senderRole)} · {new Date(message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                      </div>
+                      <p className={`whitespace-pre-wrap break-words rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${ownMessage ? 'rounded-br-md bg-gradient-to-br from-[#2F6BFF] to-[#1478d4] text-white shadow-sm' : 'rounded-bl-md border border-black/5 bg-white text-[#1D1D1F] shadow-sm'}`}>{message.text}</p>
+                    </div>
+                  </div>
+                );
+              })}
+              <div ref={endRef} />
+            </div>
           )}
         </div>
-        {role === 'barber' && (
-          <Select aria-label="Post as" value={asStaffId} onChange={e => setAsStaffId(e.target.value)} className="w-auto">
-            <option value="">Post as…</option>
-            {staff.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </Select>
-        )}
-      </div>
 
-      {channel === 'management' && (
-        <p className="text-xs text-[#6E6E73] flex items-center gap-1"><ShieldCheck size={12} aria-hidden="true" />Visible only to the business owner and receptionist (supervisor).</p>
-      )}
-
-      <Card className="p-5">
-        {loading ? <LoadingState label="Loading messages…" /> : (
-          <div className="space-y-3 max-h-[50vh] overflow-y-auto pr-1" role="log" aria-live="polite">
-            {messages.length === 0 && <p className="text-sm text-[#6E6E73]">No messages yet in this channel. Say hello!</p>}
-            {messages.map(m => (
-              <div key={m.id} className="flex flex-col">
-                <div className="flex items-baseline gap-2">
-                  <span className="text-sm font-medium">{m.senderName}</span>
-                  <span className="text-[10px] text-[#6E6E73]">{new Date(m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                </div>
-                <p className="text-sm bg-black/5 rounded-2xl px-3.5 py-2 mt-1 w-fit max-w-[85%]">{m.text}</p>
-              </div>
-            ))}
-            <div ref={endRef} />
-          </div>
-        )}
-        <form onSubmit={e => { e.preventDefault(); send(); }} className="flex gap-2 mt-4">
-          <Input aria-label="Message text" placeholder={role === 'barber' && !asStaffId ? 'Select who you are posting as first…' : 'Write a message…'} value={text} onChange={e => setText(e.target.value)} disabled={role === 'barber' && !asStaffId} />
-          <Button type="submit" disabled={!text.trim() || (role === 'barber' && !asStaffId)}><Send size={15} aria-hidden="true" /></Button>
+        <form onSubmit={event => { event.preventDefault(); void send(); }} className="flex items-end gap-2 border-t border-black/5 bg-white p-3 sm:gap-3 sm:p-4">
+          <Textarea aria-label="Message text" placeholder="Write a message to your team…" rows={1} maxLength={2000} value={text} onChange={event => setText(event.target.value)} className="max-h-32 min-h-[44px] resize-y rounded-2xl bg-[#FAFAFC] py-3" />
+          <Button type="submit" aria-label="Send message" disabled={!text.trim() || sending} className="h-11 w-11 shrink-0 rounded-2xl p-0"><Send size={17} aria-hidden="true" /></Button>
         </form>
+        <div className="flex justify-between px-5 pb-3 text-[10px] text-[#8b8f98] sm:px-6"><span>Updates automatically every few seconds</span><span>{text.length}/2000</span></div>
       </Card>
     </div>
   );

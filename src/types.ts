@@ -179,6 +179,7 @@ export type ChatChannel = string;
 export interface ChatMessage {
   id: string;
   channel: ChatChannel;
+  senderId?: string;
   senderName: string;
   senderRole: string;
   text: string;

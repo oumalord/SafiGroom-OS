@@ -1174,13 +1174,35 @@ export const handler = router({
   }],
 
   'GET /api/messages': [async ({ query }) => {
-    const channel = query.channel || 'team';
+    const context = currentContext();
+    if (!context || !['owner', 'manager', 'receptionist', 'barber'].includes(context.role)) return error('Internal team access is required', 403);
+    const channel = String(query.channel || 'team');
+    if (!['team', 'management'].includes(channel)) return error('Unknown message channel', 400);
+    if (channel === 'management' && !['owner', 'receptionist'].includes(context.role)) return error('Management channel access is restricted', 403);
     const { items } = await db.list('messages', { limit: 500 });
-    const filtered = (items as any[]).filter(m => m.channel === channel).sort((a, b) => a.createdAt - b.createdAt);
+    const filtered = (items as any[]).filter(message => message.channel === channel).sort((a, b) => a.createdAt - b.createdAt);
     return json({ items: filtered });
   }],
   'POST /api/messages': [async ({ body }) => {
-    return error('Communication is email-only. Use email notifications or promotion campaigns.', 410);
+    const context = currentContext();
+    if (!context || !['owner', 'manager', 'receptionist', 'barber'].includes(context.role)) return error('Internal team access is required', 403);
+    const channel = String(body?.channel || 'team');
+    if (!['team', 'management'].includes(channel)) return error('Unknown message channel', 400);
+    if (channel === 'management' && !['owner', 'receptionist'].includes(context.role)) return error('Management channel access is restricted', 403);
+    if (typeof body?.text !== 'string') return error('Message text is required', 400);
+    const text = body.text.trim();
+    if (!text) return error('Message text is required', 400);
+    if (text.length > 2000) return error('Messages must be 2,000 characters or fewer', 400);
+    const createdAt = Date.now();
+    const [id] = await db.add('messages', [{
+      channel,
+      senderId: context.accountId,
+      senderName: context.name,
+      senderRole: context.role,
+      text,
+      createdAt,
+    }]);
+    return json({ id, channel, senderId: context.accountId, senderName: context.name, senderRole: context.role, text, createdAt });
   }],
 
   'GET /api/memberships': [async () => { const { items } = await db.list('membership_plans', { limit: 50 }); return json({ items }); }],
