@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
-import { handler as apiRouter } from '../backend/index';
-import { db, withRequestContext } from '../backend/runtime';
+import { handler as apiRouter } from '../backend/index.ts';
+import { db, withRequestContext } from '../backend/runtime.ts';
 
 const publicRoutes = new Set([
   '/api/_healthcheck',

@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import express from 'express';
-import { handler } from './index';
-import { db, withRequestContext } from './runtime';
+import { handler } from './index.ts';
+import { db, withRequestContext } from './runtime.ts';
 import { createHash } from 'node:crypto';
 
 function normalizeRole(role: unknown) {
