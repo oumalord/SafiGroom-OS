@@ -345,7 +345,7 @@ export const handler = router({
     const email = identifier.toLowerCase();
     const phone = normalizePhone(identifier);
     const account = (items as any[]).find(item => String(item.email || '').toLowerCase() === email || (phone && normalizePhone(item.phone) === phone));
-    if (!account || account.status !== 'active' || !passwordMatches(password, account.passwordHash)) return error('Invalid email/phone or password/PIN', 401);
+    if (!account || account.id === 'account-platform-admin' || String(account.email || '').toLowerCase() === 'admin@safigroom.demo' || account.status !== 'active' || !passwordMatches(password, account.passwordHash)) return error('Invalid email/phone or password/PIN', 401);
     const token = sessionToken();
     await db.add('sessions', [sessionRecord(token, account)]);
     return json({ token, account: { id: account.id, name: account.name, email: account.email, role: normalizeRole(account.role), salonId: account.tenantId, salonName: account.salonName, branchId: account.branchId } });
@@ -371,11 +371,7 @@ export const handler = router({
     await db.add('sessions', [sessionRecord(token, account)]);
     return json({ token, account: { id: account.id, name, email, role: account.role, salonId, salonName: account.salonName, branchId } });
   }],
-  'POST /api/auth/demo': [async () => {
-    const accountId = 'account-platform-admin';
-    if (!(await db.get('accounts', [accountId]))[0]) await db.add('accounts', [{ id: accountId, tenantId: 'platform', salonName: 'All Salons', branchId: '', name: 'Platform Admin', email: 'admin@safigroom.demo', role: 'admin', status: 'active', passwordHash: passwordHash('SafiAdmin123!'), createdAt: Date.now() }]);
-    return json({ message: 'Platform administrator access ready', accounts: [{ email: 'admin@safigroom.demo', password: 'SafiAdmin123!', role: 'admin' }] });
-  }],
+  'POST /api/auth/demo': [async () => error('Demo administrator access is disabled', 410)],
   'GET /api/admin/directory': [async () => {
     requireAdmin();
     const [salons, branches, accounts] = await Promise.all([db.list('salons', { limit: 5000 }), db.list('branches', { limit: 5000 }), db.list('accounts', { limit: 5000 })]);

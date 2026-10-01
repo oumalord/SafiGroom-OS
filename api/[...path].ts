@@ -8,7 +8,6 @@ const publicRoutes = new Set([
   '/api/public/branches',
   '/api/auth/login',
   '/api/auth/signup',
-  '/api/auth/demo',
   '/api/mpesa/callback',
   '/api/payroll/timeout',
   '/api/payroll/result',
