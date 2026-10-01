@@ -29,7 +29,7 @@ function Services() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <div><h1 className="text-2xl font-semibold tracking-tight">Services Catalog</h1><p className="text-sm text-[#6E6E73]">{services.length} services across {categories.length} categories. Owners and receptionists can add new services in KES or USD.</p></div>
+        <div><h1 className="text-2xl font-semibold tracking-tight">Services Catalog</h1><p className="text-sm text-[#6E6E73]">{services.length} services across {categories.length} categories.</p></div>
         <Button onClick={() => setOpen(true)}><Plus size={16} aria-hidden="true" />Add Service</Button>
       </div>
 

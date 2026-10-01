@@ -61,7 +61,7 @@ export default function AuthScreen({ onAuthenticated }: { onAuthenticated: (acco
               <Field label="Phone" htmlFor="auth-phone"><Input id="auth-phone" autoComplete="tel" value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} /></Field>
             </>}
             <Field label={mode === 'login' ? 'Email or phone' : 'Email'} htmlFor="auth-email"><Input id="auth-email" autoComplete={mode === 'signup' ? 'email' : 'username'} type={mode === 'signup' ? 'email' : 'text'} value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} /></Field>
-            <Field label="Password" htmlFor="auth-password"><Input id="auth-password" autoComplete={mode === 'signup' ? 'new-password' : 'current-password'} type="text" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} /></Field>
+            <Field label="Password" htmlFor="auth-password"><Input id="auth-password" autoComplete={mode === 'signup' ? 'new-password' : 'current-password'} type="password" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} /></Field>
             <Button className="w-full" onClick={submit} disabled={busy}>{busy ? 'Please wait...' : mode === 'login' ? 'Log in' : 'Create client account'}</Button>
           </div>
           <p className="text-xs text-slate-200 border-t border-white/10 mt-6 pt-5">Salon and employee accounts are created by the platform administrator or salon owner.</p>

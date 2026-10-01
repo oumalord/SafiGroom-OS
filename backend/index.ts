@@ -9,9 +9,14 @@ function passwordHash(password: string, salt = randomBytes(16).toString('hex')) 
 
 function passwordMatches(password: string, stored: string) {
   const [salt, expected] = String(stored || '').split(':');
-  if (!salt || !expected) return false;
-  const actual = scryptSync(password, salt, 64);
-  return timingSafeEqual(actual, Buffer.from(expected, 'hex'));
+  if (!salt || !expected || !/^[a-f\d]{128}$/i.test(expected)) return false;
+  try {
+    const actual = scryptSync(password, salt, 64);
+    const expectedBuffer = Buffer.from(expected, 'hex');
+    return actual.length === expectedBuffer.length && timingSafeEqual(actual, expectedBuffer);
+  } catch {
+    return false;
+  }
 }
 
 function sessionToken() { return randomBytes(32).toString('hex'); }
@@ -453,9 +458,12 @@ export const handler = router({
     const newPassword = String(body?.newPassword || '');
     if (!account) return error('Account not found', 404);
     if (newPassword.length < 8) return error('Password must be at least 8 characters', 400);
-    await db.update('accounts', [{ id: account.id, record: { ...account, passwordHash: passwordHash(newPassword), passwordResetAt: Date.now() } }]);
-    await notifyCustomer(account.email, 'Your SafiGroom password was reset', `Your password was reset by the platform administrator.\nLogin email: ${account.email}\nNew temporary password: ${newPassword}`, account.id);
-    return json({ ok: true, email: account.email });
+    const updatedPasswordHash = passwordHash(newPassword);
+    await db.update('accounts', [{ id: account.id, record: { ...account, passwordHash: updatedPasswordHash, passwordResetAt: Date.now() } }]);
+    const [updatedAccount] = await db.get('accounts', [account.id]);
+    if (!updatedAccount || !passwordMatches(newPassword, updatedAccount.passwordHash)) return error('Password reset could not be verified. Please try again.', 500);
+    await notifyCustomer(account.email, 'Your SafiGroom password was reset', 'Your password was reset by the platform administrator. Sign in with the new password provided to you.', account.id);
+    return json({ ok: true, email: account.email, verified: true });
   }],
   'GET /api/audit-logs': [async ({ query }) => {
     const { items } = await db.list('audit_logs', { limit: 5000 });
@@ -480,6 +488,7 @@ export const handler = router({
 
   'GET /api/staff': [async () => { const { items } = await db.list('staff', { limit: 200 }); return json({ items }); }],
   'POST /api/staff': [async ({ body }) => {
+    if (!['owner', 'manager'].includes(currentContext()?.role || '')) return error('Only the owner or manager can add staff', 403);
     const b: any = body;
     if (!b.name) return error('Name is required', 400);
     const context = currentContext();
@@ -503,6 +512,7 @@ export const handler = router({
     return json({ id });
   }],
   'PUT /api/staff/:id': [async ({ params, body }) => {
+    if (!['owner', 'manager'].includes(currentContext()?.role || '')) return error('Only the owner or manager can edit staff', 403);
     const [existing] = await db.get('staff', [params.id]);
     if (!existing) return error('Staff not found', 404);
     const patch: any = body;
@@ -518,6 +528,7 @@ export const handler = router({
 
   'GET /api/services': [async () => { const { items } = await db.list('services', { limit: 500 }); return json({ items }); }],
   'POST /api/services': [async ({ body }) => {
+    if (!['owner', 'manager'].includes(currentContext()?.role || '')) return error('Only the owner or manager can add services', 403);
     const b: any = body;
     if (!b.name || !b.price) return error('Name and price are required', 400);
     const [id] = await db.add('services', [{ name: b.name, category: b.category || 'General', price: b.price, currency: b.currency === 'USD' ? 'USD' : 'KES', durationMin: b.durationMin || 30, description: b.description || '' }]);
@@ -528,6 +539,7 @@ export const handler = router({
 
   'GET /api/customers': [async () => { const { items } = await db.list('customers', { limit: 1000 }); return json({ items }); }],
   'POST /api/customers': [async ({ body }) => {
+    if (!['owner', 'manager'].includes(currentContext()?.role || '')) return error('Only the owner or manager can add customers', 403);
     const b: any = body;
     if (!b.name) return error('Name is required', 400);
     const [id] = await db.add('customers', [{ name: b.name, phone: b.phone || '', email: b.email || '', notes: b.notes || '', loyaltyPoints: 0, totalSpent: 0, totalSpentUSD: 0, visits: 0, lastVisit: null, createdAt: Date.now(), membershipTier: 'none', membershipExpiry: null }]);
@@ -536,6 +548,7 @@ export const handler = router({
     return json({ id });
   }],
   'PUT /api/customers/:id': [async ({ params, body }) => {
+    if (!['owner', 'manager'].includes(currentContext()?.role || '')) return error('Only the owner or manager can edit customer records', 403);
     const [existing] = await db.get('customers', [params.id]);
     if (!existing) return error('Customer not found', 404);
     const [ok] = await db.update('customers', [{ id: params.id, record: { ...existing, ...(body as any) } }]);
@@ -719,6 +732,7 @@ export const handler = router({
 
   'GET /api/products': [async () => { const { items } = await db.list('products', { limit: 500 }); return json({ items }); }],
   'POST /api/products': [async ({ body }) => {
+    if (currentContext()?.role !== 'owner') return error('Only the owner can add inventory', 403);
     const b: any = body;
     if (!b.name) return error('Product name is required', 400);
     const [id] = await db.add('products', [{ name: b.name, category: b.category || 'Other', color: b.color || '', price: b.price || 0, cost: b.cost || 0, stock: b.stock || 0, lowStockThreshold: b.lowStockThreshold ?? 5, unit: b.unit || 'pcs' }]);
@@ -727,6 +741,7 @@ export const handler = router({
     return json({ id });
   }],
   'PUT /api/products/:id': [async ({ params, body }) => {
+    if (currentContext()?.role !== 'owner') return error('Only the owner can edit inventory', 403);
     const [existing] = await db.get('products', [params.id]);
     if (!existing) return error('Product not found', 404);
     const patch: any = body;
@@ -740,7 +755,10 @@ export const handler = router({
     return json({ ok: true });
   }],
 
-  'GET /api/orders': [async () => { const { items } = await db.list('orders', { limit: 1000 }); return json({ items }); }],
+  'GET /api/orders': [async () => {
+    if (!['owner', 'manager'].includes(currentContext()?.role || '')) return error('Sales reports are available to the owner or manager only', 403);
+    const { items } = await db.list('orders', { limit: 1000 }); return json({ items });
+  }],
   'POST /api/orders': [async ({ body }) => {
     const b: any = body;
     const items = b.items;
@@ -842,7 +860,10 @@ export const handler = router({
     return json({ id: orderId, subtotalByCurrency, discountByCurrency, totalByCurrency, discountSource, pointsRedeemed });
   }],
 
-  'GET /api/expenses': [async () => { const { items } = await db.list('expenses', { limit: 500 }); return json({ items }); }],
+  'GET /api/expenses': [async () => {
+    if (currentContext()?.role !== 'owner') return error('Expense records are available to the owner only', 403);
+    const { items } = await db.list('expenses', { limit: 500 }); return json({ items });
+  }],
   'POST /api/expenses': [async ({ body }) => {
     const b: any = body;
     if (!b.category || !b.amount) return error('Category and amount are required', 400);
@@ -937,6 +958,7 @@ export const handler = router({
   'POST /api/payroll/timeout': [async ({ body }) => { await db.add('payroll_callbacks', [{ type: 'timeout', body, createdAt: Date.now() }]); return json({ ResultCode: 0, ResultDesc: 'Accepted' }); }],
 
   'GET /api/dashboard': [async ({ query }) => {
+    if (!['owner', 'manager'].includes(currentContext()?.role || '')) return error('Business reports are available to the owner or manager only', 403);
     const range = query.range || 'today';
     const now = Date.now();
     let cutoff = 0;
@@ -1043,6 +1065,7 @@ export const handler = router({
   }],
 
   'GET /api/analytics/rebooking': [async () => {
+    if (!['owner', 'manager'].includes(currentContext()?.role || '')) return error('Customer analytics are available to the owner or manager only', 403);
     const [ordersResult, customersResult] = await Promise.all([
       db.list('orders', { limit: 1000 }),
       db.list('customers', { limit: 1000 }),

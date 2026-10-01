@@ -5,6 +5,7 @@ import { BranchesApi, StaffApi, ReviewsApi } from '../lib/api';
 import type { Branch, Role, Staff, Review } from '../types';
 
 function StaffTab({ role = 'owner' }: { role?: Role }) {
+  const canManageStaff = role === 'owner' || role === 'manager';
   const [staff, setStaff] = useState<Staff[]>([]);
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState(false);
@@ -56,7 +57,7 @@ function StaffTab({ role = 'owner' }: { role?: Role }) {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div><h1 className="text-2xl font-semibold tracking-tight">Staff & Chairs</h1><p className="text-sm text-[#6E6E73]">Manage your team and station availability.</p></div>
-        <Button onClick={() => setOpen(true)}><Plus size={16} aria-hidden="true" />Add Staff</Button>
+        {canManageStaff && <Button onClick={() => setOpen(true)}><Plus size={16} aria-hidden="true" />Add Staff</Button>}
       </div>
 
       <div>
@@ -83,7 +84,7 @@ function StaffTab({ role = 'owner' }: { role?: Role }) {
               {avgRating(s.id) && <p className="text-xs text-[#6E6E73] flex items-center gap-1 mt-0.5"><Star size={11} className="fill-[#FF9500] text-[#FF9500]" aria-hidden="true" />{avgRating(s.id)!.avg.toFixed(1)} ({avgRating(s.id)!.count} review{avgRating(s.id)!.count === 1 ? '' : 's'})</p>}
             </div>
             {role === 'owner' && <Button size="sm" variant={s.employmentStatus === 'laid-off' ? 'secondary' : 'danger'} onClick={() => changeEmployment(s)}><UserX size={14} aria-hidden="true" />{s.employmentStatus === 'laid-off' ? 'Reactivate' : 'Lay off'}</Button>}
-            <select
+            {canManageStaff && <select
               aria-label={`Status for ${s.name}`}
               value={s.status}
               disabled={s.employmentStatus === 'laid-off'}
@@ -95,7 +96,7 @@ function StaffTab({ role = 'owner' }: { role?: Role }) {
               <option value="in-service">In Service</option>
               <option value="break">On Break</option>
               <option value="off">Off Duty</option>
-            </select>
+            </select>}
           </Card>
         ))}
       </div>
@@ -115,7 +116,7 @@ function StaffTab({ role = 'owner' }: { role?: Role }) {
             <Field label="Chair / Station" htmlFor="s-chair"><Input id="s-chair" value={form.chair} onChange={e => setForm(f => ({ ...f, chair: e.target.value }))} placeholder="e.g. Chair 3" /></Field>
             <Field label="Branch" htmlFor="s-branch"><Select id="s-branch" value={form.branchId} onChange={e => setForm(f => ({ ...f, branchId: e.target.value }))}>{branches.map(branch => <option key={branch.id} value={branch.id}>{branch.name}</option>)}</Select></Field>
             <Field label="Login phone number" htmlFor="s-phone"><Input id="s-phone" value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} placeholder="+254…" /></Field>
-            <Field label="4-digit login PIN" htmlFor="s-account-pin"><Input id="s-account-pin" inputMode="numeric" maxLength={4} type="text" value={form.pin} onChange={e => setForm(f => ({ ...f, pin: e.target.value.replace(/\D/g, '').slice(0, 4) }))} placeholder="e.g. 1234" /></Field>
+            <Field label="4-digit login PIN" htmlFor="s-account-pin"><Input id="s-account-pin" inputMode="numeric" maxLength={4} type="password" value={form.pin} onChange={e => setForm(f => ({ ...f, pin: e.target.value.replace(/\D/g, '').slice(0, 4) }))} placeholder="4-digit PIN" /></Field>
             <p className="text-sm rounded-xl bg-[#0071e3]/10 text-[#0058b0] px-3 py-2">Compensation is fixed at 40% of completed service work.</p>
           </div>
         </Modal>
