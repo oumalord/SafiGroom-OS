@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Plus, User, UserX, Star } from 'lucide-react';
+import { Plus, User, UserX, Star, Trash2 } from 'lucide-react';
 import { Card, Button, Badge, Modal, Field, Input, Select, LoadingState, toast } from '../components/ui';
 import { BranchesApi, StaffApi, ReviewsApi } from '../lib/api';
 import type { Branch, Role, Staff, Review } from '../types';
@@ -50,6 +50,16 @@ function StaffTab({ role = 'owner' }: { role?: Role }) {
     toast(laidOff ? `${s.name} has been marked laid off.` : `${s.name} has been reactivated.`, 'success');
     load();
   };
+  const deleteStaff = async (member: Staff) => {
+    if (!window.confirm(`Permanently delete ${member.name} and their staff login? Historical appointments, queue entries, and reviews will remain without the staff link. This cannot be undone.`)) return;
+    try {
+      await StaffApi.delete(member.id);
+      toast(`${member.name} and their staff login were permanently deleted.`, 'success');
+      load();
+    } catch (cause) {
+      toast(cause instanceof Error ? cause.message : 'Could not delete staff member.', 'error');
+    }
+  };
 
   const toneFor = (status: Staff['status']) => status === 'available' ? 'success' : status === 'in-service' ? 'warning' : status === 'break' ? 'info' : 'neutral';
 
@@ -93,6 +103,7 @@ function StaffTab({ role = 'owner' }: { role?: Role }) {
               {avgRating(s.id) && <p className="text-xs text-[#6E6E73] flex items-center gap-1 mt-0.5"><Star size={11} className="fill-[#FF9500] text-[#FF9500]" aria-hidden="true" />{avgRating(s.id)!.avg.toFixed(1)} ({avgRating(s.id)!.count} review{avgRating(s.id)!.count === 1 ? '' : 's'})</p>}
             </div>
             {role === 'owner' && <Button size="sm" variant={s.employmentStatus === 'laid-off' ? 'secondary' : 'danger'} onClick={() => changeEmployment(s)}><UserX size={14} aria-hidden="true" />{s.employmentStatus === 'laid-off' ? 'Reactivate' : 'Lay off'}</Button>}
+            {role === 'owner' && <Button size="sm" variant="danger" aria-label={`Permanently delete ${s.name}`} onClick={() => deleteStaff(s)}><Trash2 size={14} aria-hidden="true" />Delete</Button>}
             {canManageStaff && <select
               aria-label={`Status for ${s.name}`}
               value={s.status}

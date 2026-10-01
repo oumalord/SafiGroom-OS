@@ -115,6 +115,32 @@ export const db = {
       sql`CREATE TRIGGER app_records_no_delete BEFORE DELETE ON app_records FOR EACH ROW EXECUTE FUNCTION prevent_safigroom_record_delete()`,
     ]);
   },
+  async deleteStaffRecord(staffId: string, tenantId: string, accountIds: string[]) {
+    await init();
+    if (!staffId || !tenantId) throw new Error('Staff and salon identifiers are required');
+    const accountsToDelete = accountIds.filter(Boolean);
+    await sql.transaction([
+      sql`DROP TRIGGER IF EXISTS app_records_no_delete ON app_records`,
+      sql`UPDATE app_records SET record =
+        CASE
+          WHEN record->>'staffId' = ${staffId} THEN jsonb_set(record, '{staffId}', 'null'::jsonb, true)
+          ELSE record
+        END
+        WHERE tenant_id = ${tenantId} AND collection IN ('appointments', 'queue', 'reviews') AND record->>'staffId' = ${staffId}`,
+      sql`UPDATE app_records SET record = jsonb_set(
+        record,
+        '{items}',
+        COALESCE((SELECT jsonb_agg(
+          CASE WHEN item->>'staffId' = ${staffId} THEN item - 'staffId' ELSE item END
+        ) FROM jsonb_array_elements(COALESCE(record->'items', '[]'::jsonb)) item), '[]'::jsonb),
+        true
+      ) WHERE tenant_id = ${tenantId} AND collection = 'appointments' AND jsonb_typeof(record->'items') = 'array'`,
+      sql`DELETE FROM app_records WHERE collection = 'sessions' AND record->>'accountId' = ANY(${accountsToDelete})`,
+      sql`DELETE FROM app_records WHERE collection = 'accounts' AND tenant_id = ${tenantId} AND id = ANY(${accountsToDelete})`,
+      sql`DELETE FROM app_records WHERE collection = 'staff' AND tenant_id = ${tenantId} AND id = ${staffId}`,
+      sql`CREATE TRIGGER app_records_no_delete BEFORE DELETE ON app_records FOR EACH ROW EXECUTE FUNCTION prevent_safigroom_record_delete()`,
+    ]);
+  },
 };
 
 export function json(body: unknown, status = 200) {

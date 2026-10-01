@@ -81,12 +81,14 @@ export const AdminApi = {
   deleteSalon: (salonId: string) => api.delete(`/api/admin/salons/${salonId}`),
   createBranch: (payload: unknown) => api.post('/api/admin/branches', payload),
   resetPassword: (accountId: string, newPassword: string) => api.post(`/api/admin/accounts/${accountId}/reset-password`, { newPassword }),
+  deleteStaff: (staffId: string) => api.delete(`/api/admin/staff/${encodeURIComponent(staffId)}`),
 };
 
 export const StaffApi = {
   list: () => cached('staff:list', 20000, () => api.get('/api/staff').then(r => r.data.items as Staff[])),
   create: (s: Partial<Staff>) => api.post('/api/staff', s).then(r => { invalidate('staff'); return r; }),
   update: (id: string, patch: Partial<Staff>) => api.put(`/api/staff/${id}`, patch).then(r => { invalidate('staff'); return r; }),
+  delete: (id: string) => api.delete(`/api/staff/${encodeURIComponent(id)}`).then(r => { invalidate('staff'); return r; }),
 };
 
 export const ServicesApi = {

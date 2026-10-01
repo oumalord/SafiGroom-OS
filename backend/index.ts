@@ -374,8 +374,20 @@ export const handler = router({
   'POST /api/auth/demo': [async () => error('Demo administrator access is disabled', 410)],
   'GET /api/admin/directory': [async () => {
     requireAdmin();
-    const [salons, branches, accounts] = await Promise.all([db.list('salons', { limit: 5000 }), db.list('branches', { limit: 5000 }), db.list('accounts', { limit: 5000 })]);
-    return json({ salons: salons.items, branches: branches.items, accounts: (accounts.items as any[]).map(account => ({ ...account, passwordHash: undefined })) });
+    const [salons, branches, accounts, staff] = await Promise.all([db.list('salons', { limit: 5000 }), db.list('branches', { limit: 5000 }), db.list('accounts', { limit: 5000 }), db.list('staff', { limit: 5000 })]);
+    return json({ salons: salons.items, branches: branches.items, staff: staff.items, accounts: (accounts.items as any[]).map(account => ({ ...account, passwordHash: undefined })) });
+  }],
+  'DELETE /api/admin/staff/:id': [async ({ params }) => {
+    requireAdmin();
+    const [member] = await db.get('staff', [params.id]);
+    if (!member) return error('Staff member not found', 404);
+    const tenantId = String(member.tenantId || '');
+    if (!tenantId) return error('Staff member has no salon and cannot be safely removed', 409);
+    const { items: accounts } = await db.list('accounts', { limit: 5000 });
+    const linkedAccounts = (accounts as any[]).filter(account => account.tenantId === tenantId && account.staffId === member.id);
+    await db.deleteStaffRecord(member.id, tenantId, linkedAccounts.map(account => account.id));
+    await audit('deleted', 'staff', { id: member.id, name: member.name, salonName: member.salonName }, 'admin');
+    return json({ ok: true, id: member.id });
   }],
   'GET /api/branches': [async () => {
     const context = currentContext();
@@ -520,6 +532,17 @@ export const handler = router({
     await audit(patch.employmentStatus && patch.employmentStatus !== existing.employmentStatus ? patch.employmentStatus : 'updated', 'staff', updated, patch.actor || 'owner');
     if (patch.employmentStatus && patch.employmentStatus !== existing.employmentStatus) await notifyEmployee(updated, patch.employmentStatus);
     return json({ ok: true });
+  }],
+  'DELETE /api/staff/:id': [async ({ params }) => {
+    const context = currentContext();
+    if (!context || context.role !== 'owner') return error('Only the salon owner can permanently delete staff', 403);
+    const [member] = await db.get('staff', [params.id]);
+    if (!member) return error('Staff member not found', 404);
+    const { items: accounts } = await db.list('accounts', { limit: 5000 });
+    const linkedAccounts = (accounts as any[]).filter(account => account.tenantId === context.tenantId && account.staffId === member.id);
+    await db.deleteStaffRecord(member.id, context.tenantId, linkedAccounts.map(account => account.id));
+    await audit('deleted', 'staff', { id: member.id, name: member.name, salonName: member.salonName }, context.name || 'owner');
+    return json({ ok: true, id: member.id });
   }],
 
   'GET /api/services': [async () => { const { items } = await db.list('services', { limit: 500 }); return json({ items }); }],
