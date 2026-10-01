@@ -58,14 +58,15 @@ export default async function apiRoute(request: any, response: any) {
   const method = String(request.method || 'GET').toUpperCase();
   if (method === 'OPTIONS') return response.status(204).end();
 
-  let pathname: string;
-  let query: Record<string, string>;
-  try {
-    const url = new URL(request.url || '/', `https://${headerValue(request.headers?.host) || 'localhost'}`);
-    pathname = url.pathname;
-    query = Object.fromEntries(url.searchParams.entries());
-  } catch {
-    return response.status(400).json({ error: 'Invalid request URL' });
+  const incomingQuery = request.query && typeof request.query === 'object' ? request.query : {};
+  const pathFromRewrite = headerValue(incomingQuery.__path).replace(/^\/+|\/+$/g, '');
+  if (!pathFromRewrite) return response.status(404).json({ error: 'API route not found' });
+
+  const pathname = `/api/${pathFromRewrite}`;
+  const query: Record<string, string> = {};
+  for (const [key, value] of Object.entries(incomingQuery)) {
+    if (key === '__path') continue;
+    query[key] = Array.isArray(value) ? value.map(String).join(',') : String(value ?? '');
   }
 
   for (const [definition, [routeHandler]] of Object.entries(apiRouter.routes)) {
