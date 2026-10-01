@@ -54,16 +54,16 @@ export default function AuthScreen({ onAuthenticated }: { onAuthenticated: (acco
             <button className={`flex-1 rounded-full py-2 text-sm ${mode === 'login' ? 'bg-white text-[#1D1D1F] shadow-sm font-medium' : 'text-slate-200'}`} onClick={() => switchMode('login')}><LogIn size={14} className="inline mr-1" />Log in</button>
             <button className={`flex-1 rounded-full py-2 text-sm ${mode === 'signup' ? 'bg-white text-[#1D1D1F] shadow-sm font-medium' : 'text-slate-200'}`} onClick={() => switchMode('signup')}><UserPlus size={14} className="inline mr-1" />Client sign up</button>
           </div>
-          <div className="space-y-4">
+          <form autoComplete="off" onSubmit={event => { event.preventDefault(); void submit(); }} className="space-y-4">
             {mode === 'signup' && <>
-              <Field label="Salon to visit" htmlFor="auth-salon"><Select id="auth-salon" value={form.salonId} onChange={e => setForm({ ...form, salonId: e.target.value })}><option value="">Choose an existing salon</option>{salons.map(salon => <option key={salon.id} value={salon.id}>{salon.name}</option>)}</Select></Field>
-              <Field label="Full name" htmlFor="auth-name"><Input id="auth-name" autoComplete="name" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} /></Field>
-              <Field label="Phone" htmlFor="auth-phone"><Input id="auth-phone" autoComplete="tel" value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} /></Field>
+              <Field label="Salon to visit" htmlFor="auth-salon"><Select id="auth-salon" name="signup-salon" autoComplete="off" value={form.salonId} onChange={e => setForm({ ...form, salonId: e.target.value })}><option value="">Choose an existing salon</option>{salons.map(salon => <option key={salon.id} value={salon.id}>{salon.name}</option>)}</Select></Field>
+              <Field label="Full name" htmlFor="auth-name"><Input id="auth-name" name="signup-full-name" autoComplete="off" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} /></Field>
+              <Field label="Phone" htmlFor="auth-phone"><Input id="auth-phone" name="signup-phone" autoComplete="off" type="tel" value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} /></Field>
             </>}
-            <Field label={mode === 'login' ? 'Email or phone' : 'Email'} htmlFor="auth-email"><Input id="auth-email" autoComplete={mode === 'signup' ? 'email' : 'username'} type={mode === 'signup' ? 'email' : 'text'} value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} /></Field>
-            <Field label="Password" htmlFor="auth-password"><Input id="auth-password" autoComplete={mode === 'signup' ? 'new-password' : 'current-password'} type="password" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} /></Field>
-            <Button className="w-full" onClick={submit} disabled={busy}>{busy ? 'Please wait...' : mode === 'login' ? 'Log in' : 'Create client account'}</Button>
-          </div>
+            <Field label={mode === 'login' ? 'Email or phone' : 'Email'} htmlFor="auth-email"><Input id="auth-email" name={mode === 'signup' ? 'signup-email' : 'login-identifier'} autoComplete="off" type={mode === 'signup' ? 'email' : 'text'} value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} /></Field>
+            <Field label="Password" htmlFor="auth-password"><Input id="auth-password" name={mode === 'signup' ? 'signup-secret' : 'login-secret'} autoComplete="new-password" type="password" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} /></Field>
+            <Button className="w-full" type="submit" disabled={busy}>{busy ? 'Please wait...' : mode === 'login' ? 'Log in' : 'Create client account'}</Button>
+          </form>
           <p className="text-xs text-slate-200 border-t border-white/10 mt-6 pt-5">Salon and employee accounts are created by the platform administrator or salon owner.</p>
         </Card>
         <ToastHost />

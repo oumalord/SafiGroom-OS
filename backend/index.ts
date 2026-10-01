@@ -496,13 +496,13 @@ export const handler = router({
     const staffPin = String(b.pin || '');
     if (!staffPhone) return error('A phone number is required for the staff login', 400);
     if (!/^\d{4}$/.test(staffPin)) return error('Staff PIN must be exactly 4 digits', 400);
+    const { items: accounts } = await db.list('accounts', { limit: 5000 });
+    if ((accounts as any[]).some(account => normalizePhone(account.phone) === staffPhone)) return error('An account with that phone number already exists. Use a different login phone.', 409);
     const [id] = await db.add('staff', [{ name: b.name, role: b.role || 'Staff', specialties: b.specialties || [], branch: branch.name, branchId: branch.id, branchName: branch.name, chair: b.chair || '', phone: b.phone || '', accountEmail: b.accountEmail || '', accountStatus: b.accountStatus || 'pending', employmentStatus: 'active', commissionPct: 40, status: b.status || 'available' }]);
     if (!id) return error('Failed to add staff', 500);
     await audit('created', 'staff', { id, name: b.name, role: b.role || 'Staff', accountEmail: b.accountEmail || '', commissionPct: 40 }, b.actor || 'owner');
     if (staffPhone && staffPin && currentContext()) {
       const context = currentContext()!;
-      const { items: accounts } = await db.list('accounts', { limit: 5000 });
-      if ((accounts as any[]).some(account => normalizePhone(account.phone) === staffPhone)) return error('An account with that phone number already exists', 409);
       await db.add('accounts', [{ id: `account-${randomBytes(8).toString('hex')}`, tenantId: context.tenantId, salonName: context.salonName, branchId: branch.id, name: b.name, email: '', phone: staffPhone, role: b.role || 'barber', status: 'active', passwordHash: passwordHash(staffPin), staffId: id, createdAt: Date.now() }]);
     }
     return json({ id });

@@ -9,6 +9,7 @@ function StaffTab({ role = 'owner' }: { role?: Role }) {
   const [staff, setStaff] = useState<Staff[]>([]);
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
 
   const load = () => { StaffApi.list().then(setStaff).catch(() => toast('Could not load staff.', 'error')).finally(() => setLoading(false)); };
   useEffect(load, []);
@@ -22,16 +23,24 @@ function StaffTab({ role = 'owner' }: { role?: Role }) {
     return { avg: mine.reduce((s, r) => s + r.rating, 0) / mine.length, count: mine.length };
   };
 
-  const addStaff = async () => {
-    if (!form.name.trim()) { toast('Name is required.', 'error'); return; }
-    if (!form.phone.trim()) { toast('A phone number is required for the staff login.', 'error'); return; }
-    if (!/^\d{4}$/.test(form.pin)) { toast('Staff PIN must be exactly 4 digits.', 'error'); return; }
-    if (!form.branchId) { toast('Choose a branch for this staff member.', 'error'); return; }
-    await StaffApi.create({ ...form, accountStatus: 'active', specialties: [], status: 'available' });
-    toast('Staff member and worker account created.', 'success');
-    setOpen(false);
-    setForm({ name: '', role: 'Barber', chair: '', phone: '', pin: '', branchId: branches[0]?.id || '' });
-    load();
+  const addStaff = async (submitted: { name: string; role: string; chair: string; phone: string; pin: string; branchId: string }) => {
+    if (saving) return;
+    if (!submitted.name.trim()) { toast('Name is required.', 'error'); return; }
+    if (!submitted.phone.trim()) { toast('Enter a phone number for the staff login.', 'error'); return; }
+    if (!/^\d{4}$/.test(submitted.pin)) { toast('Enter a 4-digit staff PIN.', 'error'); return; }
+    if (!submitted.branchId) { toast('Choose a branch for this staff member.', 'error'); return; }
+    setSaving(true);
+    try {
+      await StaffApi.create({ ...submitted, accountStatus: 'active', specialties: [], status: 'available' });
+      toast('Staff member and worker account created.', 'success');
+      setOpen(false);
+      setForm({ name: '', role: 'Barber', chair: '', phone: '', pin: '', branchId: branches[0]?.id || '' });
+      load();
+    } catch (cause) {
+      toast(cause instanceof Error ? cause.message : 'Could not add staff. Please check the details and try again.', 'error');
+    } finally {
+      setSaving(false);
+    }
   };
 
   const changeStatus = async (s: Staff, status: Staff['status']) => { await StaffApi.update(s.id, { status }); load(); };
@@ -104,21 +113,35 @@ function StaffTab({ role = 'owner' }: { role?: Role }) {
       {open && (
         <Modal title="Add Staff Member" onClose={() => setOpen(false)} footer={<>
           <Button variant="secondary" onClick={() => setOpen(false)}>Cancel</Button>
-          <Button onClick={addStaff}>Add Staff</Button>
+          <Button type="submit" form="staff-create-form" disabled={saving}>{saving ? 'Adding…' : 'Add Staff'}</Button>
         </>}>
-          <div className="space-y-4">
-            <Field label="Full name" htmlFor="s-name"><Input id="s-name" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} /></Field>
+          <form id="staff-create-form" autoComplete="off" onSubmit={event => {
+            event.preventDefault();
+            const values = new FormData(event.currentTarget);
+            const submitted = {
+              name: String(values.get('new-staff-full-name') || form.name),
+              role: String(values.get('new-staff-role') || form.role),
+              chair: String(values.get('new-staff-chair') || form.chair),
+              phone: String(values.get('new-staff-login-phone') || form.phone),
+              pin: String(values.get('new-staff-login-pin') || form.pin),
+              branchId: String(values.get('new-staff-branch') || form.branchId),
+            };
+            setForm(submitted);
+            void addStaff(submitted);
+          }} className="space-y-4">
+            <input type="text" name="username" autoComplete="username" tabIndex={-1} aria-hidden="true" className="pointer-events-none absolute -left-[10000px] h-px w-px opacity-0" />
+            <Field label="Full name" htmlFor="s-name"><Input id="s-name" name="new-staff-full-name" autoComplete="off" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} /></Field>
             <Field label="Role" htmlFor="s-role">
-              <Select id="s-role" value={form.role} onChange={e => setForm(f => ({ ...f, role: e.target.value }))}>
+              <Select id="s-role" name="new-staff-role" autoComplete="off" value={form.role} onChange={e => setForm(f => ({ ...f, role: e.target.value }))}>
                 <option>Barber</option><option>Hair Stylist</option><option>Nail Technician</option><option>Spa Therapist</option><option>Makeup Artist</option><option>Receptionist</option>
               </Select>
             </Field>
-            <Field label="Chair / Station" htmlFor="s-chair"><Input id="s-chair" value={form.chair} onChange={e => setForm(f => ({ ...f, chair: e.target.value }))} placeholder="e.g. Chair 3" /></Field>
-            <Field label="Branch" htmlFor="s-branch"><Select id="s-branch" value={form.branchId} onChange={e => setForm(f => ({ ...f, branchId: e.target.value }))}>{branches.map(branch => <option key={branch.id} value={branch.id}>{branch.name}</option>)}</Select></Field>
-            <Field label="Login phone number" htmlFor="s-phone"><Input id="s-phone" value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} placeholder="+254…" /></Field>
-            <Field label="4-digit login PIN" htmlFor="s-account-pin"><Input id="s-account-pin" inputMode="numeric" maxLength={4} type="password" value={form.pin} onChange={e => setForm(f => ({ ...f, pin: e.target.value.replace(/\D/g, '').slice(0, 4) }))} placeholder="4-digit PIN" /></Field>
+            <Field label="Chair / Station" htmlFor="s-chair"><Input id="s-chair" name="new-staff-chair" autoComplete="off" value={form.chair} onChange={e => setForm(f => ({ ...f, chair: e.target.value }))} placeholder="e.g. Chair 3" /></Field>
+            <Field label="Branch" htmlFor="s-branch"><Select id="s-branch" name="new-staff-branch" autoComplete="off" value={form.branchId} onChange={e => setForm(f => ({ ...f, branchId: e.target.value }))}>{branches.map(branch => <option key={branch.id} value={branch.id}>{branch.name}</option>)}</Select></Field>
+            <Field label="Login phone number" htmlFor="s-phone"><Input id="s-phone" name="new-staff-login-phone" type="tel" inputMode="tel" autoComplete="new-password" value={form.phone} onChange={e => setForm(f => ({ ...f, phone: e.target.value }))} placeholder="+254…" /></Field>
+            <Field label="4-digit login PIN" htmlFor="s-account-pin"><Input id="s-account-pin" name="new-staff-login-pin" inputMode="numeric" maxLength={4} type="password" autoComplete="new-password" value={form.pin} onChange={e => setForm(f => ({ ...f, pin: e.target.value.replace(/\D/g, '').slice(0, 4) }))} placeholder="4-digit PIN" /></Field>
             <p className="text-sm rounded-xl bg-[#0071e3]/10 text-[#0058b0] px-3 py-2">Compensation is fixed at 40% of completed service work.</p>
-          </div>
+          </form>
         </Modal>
       )}
     </div>
