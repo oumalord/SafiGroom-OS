@@ -45,8 +45,10 @@ function Appointments({ role }: { role: Role }) {
   useEffect(loadOptions, [role]);
 
   useEffect(() => {
+    let active = true;
     setLoading(true);
-    AppointmentsApi.list(date).then(setAppts).catch(() => toast('Could not load appointments.', 'error')).finally(() => setLoading(false));
+    AppointmentsApi.list(date).then(items => { if (active) setAppts(items); }).catch(cause => { if (active) toast(cause instanceof Error ? cause.message : 'Could not load appointments.', 'error'); }).finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
   }, [date]);
 
   const reload = () => {
@@ -90,6 +92,7 @@ function Appointments({ role }: { role: Role }) {
     const startMin = toMin(form.time);
     const endMin = startMin + service.durationMin;
     const conflict = staffMember && appts.find(a => {
+      if (a.date !== date) return false;
       if (a.staffId !== staffMember.id) return false;
       if (a.status === 'cancelled' || a.status === 'no-show' || a.status === 'completed') return false;
       const s = toMin(a.time);
