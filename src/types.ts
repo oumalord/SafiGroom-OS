@@ -19,6 +19,15 @@ export interface Staff {
   branchName?: string;
 }
 
+export interface StaffPortalDashboard {
+  staff: { id: string; name: string; role: string; chair: string; branchName: string };
+  waitingNow: number;
+  dailyEarningsKES: number;
+  weeklyEarningsKES: number;
+  clientsServedToday: number;
+  weekStartsAt: number;
+}
+
 export interface Branch {
   id: string;
   salonId: string;

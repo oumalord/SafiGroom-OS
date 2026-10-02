@@ -22,11 +22,13 @@ import CustomerDashboard from './tabs/CustomerDashboard';
 import AuthScreen from './components/AuthScreen';
 import Admin from './tabs/Admin';
 import Messages from './tabs/Messages';
+import StaffPortal from './tabs/StaffPortal';
+import StaffPinGate from './components/StaffPinGate';
 
 type TabKey = 'dashboard' | 'appointments' | 'queue' | 'messages' | 'staff' | 'customers' | 'pos' | 'inventory' | 'services' | 'memberships' | 'promotions' | 'reports' | 'finance' | 'ai' | 'booking' | 'logs' | 'admin';
 
 const TABS: { key: TabKey; label: string; icon: any; roles: Role[] }[] = [
-  { key: 'dashboard', label: 'Dashboard', icon: Home, roles: ['owner', 'customer'] },
+  { key: 'dashboard', label: 'Dashboard', icon: Home, roles: ['owner', 'customer', 'barber'] },
   { key: 'appointments', label: 'Appointments', icon: Calendar, roles: ['owner', 'manager', 'receptionist', 'barber'] },
   { key: 'queue', label: 'Queue', icon: Users, roles: ['owner', 'manager', 'receptionist', 'barber'] },
   { key: 'messages', label: 'Messages', icon: MessageSquare, roles: ['owner', 'manager', 'receptionist', 'barber'] },
@@ -106,6 +108,8 @@ function App() {
     setAccount(authenticatedAccount);
     setTab(initialTabFor(authenticatedAccount));
   }} />;
+
+  if (effectiveRole === 'barber' && account.mustChangePin) return <StaffPinGate name={account.name} onComplete={() => setAccount((current: any) => ({ ...current, mustChangePin: false }))} onLogout={() => { AuthApi.logout(); setAccount(null); }} />;
 
   return (
     <div className="min-h-screen bg-transparent text-white md:flex">
@@ -214,6 +218,7 @@ function App() {
             ) : (
               <>
                 {tab === 'dashboard' && effectiveRole === 'owner' && <Dashboard />}
+                {tab === 'dashboard' && effectiveRole === 'barber' && <StaffPortal />}
                 {tab === 'dashboard' && effectiveRole === 'customer' && <CustomerDashboard onBook={() => setTab('booking')} />}
                 {tab === 'appointments' && <Appointments role={effectiveRole} />}
                 {tab === 'queue' && <Queue />}

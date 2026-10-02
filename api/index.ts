@@ -51,6 +51,7 @@ async function resolveContext(request: any) {
     branchId,
     role,
     name: account.name,
+    mustChangePin: Boolean(account.staffId && role !== 'receptionist' && (account.mustChangePin || !account.pinChangedAt)),
   };
 }
 
@@ -83,6 +84,7 @@ export default async function apiRoute(request: any, response: any) {
     try {
       const context = await resolveContext(request);
       if (!publicRoutes.has(pathname) && !context) return response.status(401).json({ error: 'Please log in.' });
+      if (context?.mustChangePin && pathname !== '/api/auth/change-pin') return response.status(403).json({ error: 'Change your staff PIN before using the portal.', code: 'PIN_CHANGE_REQUIRED' });
 
       let body = request.body ?? {};
       if (typeof body === 'string') {

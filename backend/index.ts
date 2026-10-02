@@ -349,7 +349,20 @@ export const handler = router({
     if (!account || account.id === 'account-platform-admin' || String(account.email || '').toLowerCase() === 'admin@safigroom.demo' || account.status !== 'active' || !passwordMatches(password, account.passwordHash)) return error('Invalid email/phone or password/PIN', 401);
     const token = sessionToken();
     await db.add('sessions', [sessionRecord(token, account)]);
-    return json({ token, account: { id: account.id, name: account.name, email: account.email, role: normalizeRole(account.role), salonId: account.tenantId, salonName: account.salonName, branchId: account.branchId } });
+    const role = normalizeRole(account.role);
+    const mustChangePin = Boolean(account.staffId && role !== 'receptionist' && (account.mustChangePin || !account.pinChangedAt));
+    return json({ token, account: { id: account.id, name: account.name, email: account.email, role, salonId: account.tenantId, salonName: account.salonName, branchId: account.branchId, mustChangePin } });
+  }],
+  'POST /api/auth/change-pin': [async ({ body }) => {
+    const context = currentContext();
+    if (!context || context.role === 'receptionist' || !['barber', 'manager', 'owner'].includes(context.role)) return error('PIN change is available only to non-reception staff accounts', 403);
+    const newPin = String(body?.newPin || '');
+    if (!/^\d{4}$/.test(newPin)) return error('Your new PIN must be exactly 4 digits', 400);
+    const [account] = await db.get('accounts', [context.accountId]);
+    if (!account || !account.staffId) return error('Staff account not found', 404);
+    const now = Date.now();
+    await db.update('accounts', [{ id: account.id, record: { ...account, passwordHash: passwordHash(newPin), mustChangePin: false, pinChangedAt: now } }]);
+    return json({ ok: true, mustChangePin: false });
   }],
   'POST /api/auth/signup': [async ({ body }) => {
     const name = String(body?.name || '').trim();
@@ -502,6 +515,43 @@ export const handler = router({
       return { ...member, compensationType: member.compensationType || (isReceptionist ? 'salary' : 'commission'), monthlySalary: Number(member.monthlySalary || 0), commissionPct: isReceptionist ? 0 : Number(member.commissionPct ?? 40) };
     }) });
   }],
+  'GET /api/staff/me/dashboard': [async () => {
+    const context = currentContext();
+    if (!context || context.role !== 'barber') return error('This dashboard is available to service staff only', 403);
+    const [account] = await db.get('accounts', [context.accountId]);
+    if (!account?.staffId) return error('Your staff profile is not linked. Ask the salon owner to check your account.', 404);
+    const [member] = await db.get('staff', [account.staffId]);
+    if (!member || member.tenantId !== context.tenantId) return error('Your staff profile could not be found for this salon.', 404);
+    const [{ items: orders }, { items: queue }] = await Promise.all([
+      db.listAllTenant('orders', context.tenantId, { limit: 5000 }),
+      db.listAllTenant('queue', context.tenantId, { limit: 3000 }),
+    ]);
+    const now = new Date();
+    const todayStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+    const weekStart = todayStart - ((now.getUTCDay() + 6) % 7) * DAY;
+    let dailyEarningsKES = 0;
+    let weeklyEarningsKES = 0;
+    const clientsToday = new Set<string>();
+    for (const order of orders as any[]) {
+      const createdAt = Number(order.createdAt || 0);
+      if (createdAt < weekStart || createdAt >= now.getTime()) continue;
+      let thisOrderCommissionToday = 0;
+      for (const item of order.items || []) {
+        if (item.type !== 'service' || item.staffId !== member.id || item.currency === 'USD') continue;
+        const revenue = Number(item.lineTotalAfterDiscount ?? Number(item.price || 0) * Number(item.qty || 1)) || 0;
+        const pct = Number(member.commissionPct ?? 40);
+        const commission = revenue * pct / 100;
+        weeklyEarningsKES += commission;
+        if (createdAt >= todayStart) thisOrderCommissionToday += commission;
+      }
+      if (createdAt >= todayStart && thisOrderCommissionToday > 0) {
+        dailyEarningsKES += thisOrderCommissionToday;
+        clientsToday.add(String(order.customerId || order.customerName || order.id));
+      }
+    }
+    const waitingNow = (queue as any[]).filter(item => item.staffId === member.id && item.status === 'waiting').length;
+    return json({ staff: { id: member.id, name: member.name, role: member.role, chair: member.chair || '', branchName: member.branchName || member.branch || '' }, waitingNow, dailyEarningsKES: Math.round(dailyEarningsKES), weeklyEarningsKES: Math.round(weeklyEarningsKES), clientsServedToday: clientsToday.size, weekStartsAt: weekStart });
+  }],
   'POST /api/staff': [async ({ body }) => {
     if (!['owner', 'manager'].includes(currentContext()?.role || '')) return error('Only the owner or manager can add staff', 403);
     const b: any = body;
@@ -528,7 +578,7 @@ export const handler = router({
     await audit('created', 'staff', { id, name: b.name, role: staffRole, accountEmail: b.accountEmail || '', compensationType, monthlySalary: isReceptionist ? monthlySalary : 0, commissionPct }, b.actor || 'owner');
     if (staffPhone && staffPin && currentContext()) {
       const context = currentContext()!;
-      await db.add('accounts', [{ id: `account-${randomBytes(8).toString('hex')}`, tenantId: context.tenantId, salonName: context.salonName, branchId: branch.id, name: b.name, email: '', phone: staffPhone, role: staffRole, status: 'active', passwordHash: passwordHash(staffPin), staffId: id, createdAt: Date.now() }]);
+      await db.add('accounts', [{ id: `account-${randomBytes(8).toString('hex')}`, tenantId: context.tenantId, salonName: context.salonName, branchId: branch.id, name: b.name, email: '', phone: staffPhone, role: staffRole, status: 'active', passwordHash: passwordHash(staffPin), staffId: id, mustChangePin: !isReceptionist, pinChangedAt: isReceptionist ? Date.now() : null, createdAt: Date.now() }]);
     }
     return json({ id });
   }],

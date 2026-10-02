@@ -1,4 +1,4 @@
-import type { Staff, ServiceItem, Customer, Appointment, QueueEntry, Product, Order, Expense, DashboardData, RebookingItem, ChatChannel, ChatMessage, Currency, MembershipPlan, Promotion, Review, AuditLog, Branch, PayoutBatch } from '../types';
+import type { Staff, StaffPortalDashboard, ServiceItem, Customer, Appointment, QueueEntry, Product, Order, Expense, DashboardData, RebookingItem, ChatChannel, ChatMessage, Currency, MembershipPlan, Promotion, Review, AuditLog, Branch, PayoutBatch } from '../types';
 
 const api = {
   get: async (path: string) => ({ data: await request(path) }),
@@ -52,6 +52,12 @@ export const AuthApi = {
     if (result.data.account.branchId) window.localStorage.setItem('safigroom_selected_branch', result.data.account.branchId);
     return result.data.account;
   },
+  changeStaffPin: async (newPin: string) => {
+    await api.post('/api/auth/change-pin', { newPin });
+    const account = AuthApi.account();
+    if (account) window.localStorage.setItem('safigroom_account', JSON.stringify({ ...account, mustChangePin: false }));
+    return true;
+  },
   signup: async (payload: { name: string; email: string; phone: string; password: string; salonId: string }) => {
     const result = await api.post('/api/auth/signup', payload);
     window.localStorage.setItem('safigroom_session', result.data.token);
@@ -89,6 +95,10 @@ export const StaffApi = {
   create: (s: Partial<Staff>) => api.post('/api/staff', s).then(r => { invalidate('staff'); return r; }),
   update: (id: string, patch: Partial<Staff>) => api.put(`/api/staff/${id}`, patch).then(r => { invalidate('staff'); return r; }),
   delete: (id: string) => api.delete(`/api/staff/${encodeURIComponent(id)}`).then(r => { invalidate('staff'); return r; }),
+};
+
+export const StaffPortalApi = {
+  dashboard: () => api.get('/api/staff/me/dashboard').then(r => r.data as StaffPortalDashboard),
 };
 
 export const ServicesApi = {

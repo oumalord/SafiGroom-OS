@@ -39,7 +39,8 @@ async function resolveContext(request: any) {
     const [branch] = await db.get('branches', [requestedBranchId]);
     if (branch && branch.salonId === account.tenantId && branch.status === 'active') branchId = branch.id;
   }
-  return { accountId: account.id, tenantId: account.tenantId, salonName: account.salonName, branchId, role: normalizeRole(account.role), name: account.name };
+  const role = normalizeRole(account.role);
+  return { accountId: account.id, tenantId: account.tenantId, salonName: account.salonName, branchId, role, name: account.name, mustChangePin: Boolean(account.staffId && role !== 'receptionist' && (account.mustChangePin || !account.pinChangedAt)) };
 }
 
 const publicRoutes = new Set(['/api/_healthcheck', '/api/public/salons', '/api/public/branches', '/api/auth/login', '/api/auth/signup', '/api/mpesa/callback', '/api/payroll/timeout', '/api/payroll/result']);
@@ -54,6 +55,7 @@ for (const [definition, [routeHandler]] of Object.entries(handler.routes)) {
     try {
       const context = await resolveContext(request);
       if (!publicRoutes.has(request.path) && !context) return response.status(401).json({ error: 'Please log in.' });
+      if (context?.mustChangePin && request.path !== '/api/auth/change-pin') return response.status(403).json({ error: 'Change your staff PIN before using the portal.', code: 'PIN_CHANGE_REQUIRED' });
       const result = await withRequestContext(context, () => routeHandler({ body: request.body, query: request.query, params }));
       response.status(result?.status || 200).json(result?.body ?? result);
     } catch (cause) {
