@@ -12,7 +12,6 @@ function Finance() {
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [payouts, setPayouts] = useState<PayoutBatch[]>([]);
   const [staff, setStaff] = useState<Staff[]>([]);
-  const [salaryAmounts, setSalaryAmounts] = useState<Record<string, number>>({});
   const [payrollSending, setPayrollSending] = useState(false);
   const [paying, setPaying] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -48,8 +47,8 @@ function Finance() {
   };
 
   const sendPayroll = async () => {
-    const recipients = staff.filter(member => (salaryAmounts[member.id] || 0) > 0).map(member => ({ staffId: member.id, amountKES: salaryAmounts[member.id], phone: member.phone }));
-    if (!recipients.length) { toast('Enter a salary amount for at least one employee.', 'error'); return; }
+    const recipients = staff.filter(member => member.compensationType === 'salary' && member.employmentStatus !== 'laid-off' && Number(member.monthlySalary || 0) > 0).map(member => ({ staffId: member.id, amountKES: Number(member.monthlySalary), phone: member.phone }));
+    if (!recipients.length) { toast('No active monthly-salary staff with a configured salary to pay.', 'error'); return; }
     if (recipients.some(recipient => !/^(?:\+?254|0)[17]\d{8}$/.test(recipient.phone.replace(/\s+/g, '')))) { toast('Every selected employee needs a valid Kenyan phone number.', 'error'); return; }
     if (!window.confirm(`Send ${fmtMoney(recipients.reduce((sum, recipient) => sum + recipient.amountKES, 0), 'KES')} to ${recipients.length} employees now?`)) return;
     setPayrollSending(true);
@@ -88,7 +87,7 @@ function Finance() {
             <StatCard label="Revenue" value={fmtMoney(revenueKES, 'KES')} icon={Receipt} tone="success" />
             <StatCard label="Product Cost" value={fmtMoney(data.productCost, 'KES')} icon={Receipt} />
             <StatCard label="Commissions Owed" value={fmtMoney(commissionsKES, 'KES')} icon={Receipt} />
-            <StatCard label="Commission Rate" value="40%" sub="Completed service work" icon={Receipt} tone="warning" />
+            <StatCard label="Commission Rate" value="40%" sub="Commission-paid service staff" icon={Receipt} tone="warning" />
           </div>
           <Card className="p-6">
             <h2 className="font-semibold mb-4">Profitability Breakdown</h2>
@@ -99,7 +98,7 @@ function Finance() {
               <div className="flex justify-between"><span className="text-[#6E6E73]">− Recorded expenses</span><span>-{fmtMoney(data.expenseTotal, 'KES')}</span></div>
               <div className="flex justify-between font-semibold text-base border-t border-black/5 pt-2 mt-2"><span>Net Profit</span><span className={profitKES >= 0 ? 'text-[#1c7c34]' : 'text-[#b0201a]'}>{fmtMoney(profitKES, 'KES')}</span></div>
             </div>
-            <p className="text-xs text-[#6E6E73] mt-3">See Reports for the full employee-by-employee 40% commission statement.</p>
+            <p className="text-xs text-[#6E6E73] mt-3">Monthly salaries are managed separately in Payroll. See Reports for the commission-paid staff statement.</p>
           </Card>
           <Card className="p-6">
             <h2 className="font-semibold mb-4">Payment Methods</h2>
@@ -128,7 +127,7 @@ function Finance() {
 
       <Card className="p-6">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4"><div><h2 className="font-semibold">Payroll</h2><p className="text-xs text-[#6E6E73]">Enter salary amounts and send one M-Pesa B2C batch. Transfers require B2C credentials in the backend environment.</p></div><Button onClick={sendPayroll} disabled={payrollSending}>{payrollSending ? 'Sending…' : 'Send payroll batch'}</Button></div>
-        <div className="space-y-2">{staff.filter(member => member.employmentStatus !== 'laid-off').map(member => <div key={member.id} className="grid grid-cols-[1fr_auto] items-center gap-3 border-b border-black/5 pb-2"><div><p className="text-sm font-medium">{member.name}</p><p className="text-xs text-[#6E6E73]">{member.phone || 'No phone number'} · {member.branchName || member.branch}</p></div><Input aria-label={`Salary for ${member.name}`} type="number" min="0" placeholder="KES" value={salaryAmounts[member.id] || ''} onChange={event => setSalaryAmounts(current => ({ ...current, [member.id]: Number(event.target.value) }))} className="w-32" /></div>)}</div>
+        <div className="space-y-2">{staff.filter(member => member.compensationType === 'salary' && member.employmentStatus !== 'laid-off').map(member => <div key={member.id} className="grid grid-cols-[1fr_auto] items-center gap-3 border-b border-black/5 pb-2"><div><p className="text-sm font-medium">{member.name}</p><p className="text-xs text-[#6E6E73]">Monthly salary · {member.phone || 'No phone number'} · {member.branchName || member.branch}</p></div><div className="rounded-xl bg-black/[0.03] px-3 py-2 text-sm font-medium">{fmtMoney(Number(member.monthlySalary || 0), 'KES')} / month</div></div>)}{staff.every(member => member.compensationType !== 'salary' || member.employmentStatus === 'laid-off') && <p className="text-sm text-[#6E6E73]">No active monthly-salary staff yet. Receptionists are configured with a monthly salary when added.</p>}</div>
       </Card>
 
       <Card className="p-6">

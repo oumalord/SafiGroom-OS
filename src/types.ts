@@ -8,7 +8,9 @@ export interface Staff {
   branch: string;
   chair: string;
   phone: string;
-  commissionPct: number;
+  compensationType?: 'commission' | 'salary';
+  monthlySalary?: number;
+  commissionPct?: number;
   status: 'available' | 'in-service' | 'break' | 'off';
   accountEmail?: string;
   accountStatus?: 'active' | 'pending' | 'disabled';

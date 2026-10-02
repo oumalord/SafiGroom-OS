@@ -30,11 +30,11 @@ function OwnerReport({ range }: { range: Range }) {
   const commissionsKES = data.commissionsByCurrency.KES || 0;
   const profitKES = data.estimatedProfitByCurrency.KES || 0;
 
-  const commissionStatement = staff.map(s => {
+  const commissionStatement = staff.filter(s => s.compensationType !== 'salary').map(s => {
     const perf = data.topStaff.filter(t => t.name === s.name);
     const commission = perf.reduce((sum, p) => sum + (p.currency === 'KES' ? p.commission : 0), 0);
     const serviceRevenue = perf.reduce((sum, p) => sum + (p.currency === 'KES' ? p.revenue : 0), 0);
-    return { name: s.name, role: s.role, serviceRevenue, commission };
+    return { name: s.name, role: s.role, commissionPct: s.commissionPct ?? 40, serviceRevenue, commission };
   });
 
   const handleDownload = () => {
@@ -52,7 +52,7 @@ function OwnerReport({ range }: { range: Range }) {
       ['Net Profit after commission and expenses (KES)', profitKES],
       [],
       ['Staff', 'Role', 'Service Revenue (KES)', 'Commission Rate', 'Commission Earned (KES)'],
-      ...commissionStatement.map(p => [p.name, p.role, Math.round(p.serviceRevenue), '40%', Math.round(p.commission)]),
+      ...commissionStatement.map(p => [p.name, p.role, Math.round(p.serviceRevenue), `${p.commissionPct}%`, Math.round(p.commission)]),
     ];
     downloadCSV(`safigroom-owner-report-${range}.csv`, rows);
   };
@@ -61,7 +61,7 @@ function OwnerReport({ range }: { range: Range }) {
     <div className="space-y-6">
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard label="Revenue" value={fmtMoney(revenueKES, 'KES')} icon={TrendingUp} tone="success" />
-        <StatCard label="Commission Rate" value="40%" sub="Completed service work" icon={Users} />
+        <StatCard label="Commission Rate" value="40%" sub="Commission-paid service staff" icon={Users} />
         <StatCard label="Commissions" value={fmtMoney(commissionsKES, 'KES')} icon={Users} />
         <StatCard label="Net Profit" value={fmtMoney(profitKES, 'KES')} icon={TrendingUp} tone={profitKES >= 0 ? 'success' : 'danger'} />
       </div>
@@ -87,7 +87,7 @@ function OwnerReport({ range }: { range: Range }) {
             ))}
           </tbody>
         </table>
-        <p className="text-xs text-[#6E6E73] mt-3">Each employee receives exactly 40% of their completed service revenue. Net profit subtracts commissions, product cost and recorded expenses.</p>
+        <p className="text-xs text-[#6E6E73] mt-3">Commission-paid service staff earn their configured rate (40% by default). Monthly-salary reception staff are excluded from commissions.</p>
       </Card>
     </div>
   );

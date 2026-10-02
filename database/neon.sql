@@ -100,11 +100,24 @@ SELECT id, record
 FROM app_records
 WHERE collection = 'products';
 
--- One-time data policy migration: remove salary fields and force the
--- commission-only employment model for existing staff records.
+-- Preserve salary-based reception roles; default legacy service staff to commission.
 UPDATE app_records
-SET record = (record - 'monthlySalary') || jsonb_build_object('commissionPct', 40, 'employmentStatus', COALESCE(record->>'employmentStatus', 'active'))
-WHERE collection = 'staff';
+SET record = record || jsonb_build_object(
+  'compensationType', CASE
+    WHEN LOWER(COALESCE(record->>'role', '')) LIKE '%reception%' OR record->>'monthlySalary' IS NOT NULL THEN 'salary'
+    ELSE 'commission'
+  END,
+  'commissionPct', CASE
+    WHEN LOWER(COALESCE(record->>'role', '')) LIKE '%reception%' OR record->>'monthlySalary' IS NOT NULL THEN 0
+    ELSE COALESCE(NULLIF(record->>'commissionPct', '')::numeric, 40)
+  END,
+  'monthlySalary', CASE
+    WHEN LOWER(COALESCE(record->>'role', '')) LIKE '%reception%' OR record->>'monthlySalary' IS NOT NULL THEN COALESCE(NULLIF(record->>'monthlySalary', '')::numeric, 0)
+    ELSE COALESCE(NULLIF(record->>'monthlySalary', '')::numeric, 0)
+  END,
+  'employmentStatus', COALESCE(record->>'employmentStatus', 'active')
+)
+WHERE collection = 'staff' AND record->>'compensationType' IS NULL;
 
 DROP TRIGGER IF EXISTS app_records_no_delete ON app_records;
 CREATE TRIGGER app_records_no_delete

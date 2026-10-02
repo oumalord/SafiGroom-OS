@@ -146,9 +146,10 @@ function buildPriceListServices() {
 async function migrateExistingData(staffList: any[]) {
   const staffUpdates: any[] = [];
   for (const s of staffList) {
-    if (s.monthlySalary !== undefined || s.commissionPct !== 40 || s.employmentStatus === undefined || s.accountStatus === undefined || s.accountEmail === undefined) {
-      const record = { ...s, employmentStatus: s.employmentStatus ?? 'active', accountEmail: s.accountEmail ?? '', accountStatus: s.accountStatus ?? 'pending', commissionPct: 40 };
-      delete record.monthlySalary;
+    const receptionist = String(s.role || '').toLowerCase().includes('reception');
+    const compensationType = s.compensationType || (receptionist ? 'salary' : 'commission');
+    if (s.compensationType !== compensationType || s.employmentStatus === undefined || s.accountStatus === undefined || s.accountEmail === undefined || (!receptionist && s.commissionPct !== 40)) {
+      const record = { ...s, employmentStatus: s.employmentStatus ?? 'active', accountEmail: s.accountEmail ?? '', accountStatus: s.accountStatus ?? 'pending', compensationType, commissionPct: compensationType === 'salary' ? 0 : 40, ...(compensationType === 'salary' ? { monthlySalary: Number(s.monthlySalary || 0) } : {}) };
       staffUpdates.push({ id: s.id, record });
     }
   }
@@ -494,7 +495,13 @@ export const handler = router({
     return json({ seeded, migrated: true });
   }],
 
-  'GET /api/staff': [async () => { const { items } = await db.list('staff', { limit: 200 }); return json({ items }); }],
+  'GET /api/staff': [async () => {
+    const { items } = await db.list('staff', { limit: 200 });
+    return json({ items: (items as any[]).map(member => {
+      const isReceptionist = String(member.role || '').toLowerCase().includes('reception');
+      return { ...member, compensationType: member.compensationType || (isReceptionist ? 'salary' : 'commission'), monthlySalary: Number(member.monthlySalary || 0), commissionPct: isReceptionist ? 0 : Number(member.commissionPct ?? 40) };
+    }) });
+  }],
   'POST /api/staff': [async ({ body }) => {
     if (!['owner', 'manager'].includes(currentContext()?.role || '')) return error('Only the owner or manager can add staff', 403);
     const b: any = body;
@@ -506,16 +513,22 @@ export const handler = router({
     if (!branch) return error('Choose a valid branch for this staff member', 400);
     const staffPhone = normalizePhone(b.phone);
     const staffPin = String(b.pin || '');
+    const staffRole = String(b.role || 'Staff').trim();
+    const isReceptionist = staffRole.toLowerCase().includes('reception');
+    const monthlySalary = Number(b.monthlySalary || 0);
     if (!staffPhone) return error('A phone number is required for the staff login', 400);
     if (!/^\d{4}$/.test(staffPin)) return error('Staff PIN must be exactly 4 digits', 400);
+    if (isReceptionist && (!Number.isFinite(monthlySalary) || monthlySalary <= 0)) return error('A positive monthly salary in KES is required for reception staff', 400);
     const { items: accounts } = await db.list('accounts', { limit: 5000 });
     if ((accounts as any[]).some(account => normalizePhone(account.phone) === staffPhone)) return error('An account with that phone number already exists. Use a different login phone.', 409);
-    const [id] = await db.add('staff', [{ name: b.name, role: b.role || 'Staff', specialties: b.specialties || [], branch: branch.name, branchId: branch.id, branchName: branch.name, chair: b.chair || '', phone: b.phone || '', accountEmail: b.accountEmail || '', accountStatus: b.accountStatus || 'pending', employmentStatus: 'active', commissionPct: 40, status: b.status || 'available' }]);
+    const compensationType = isReceptionist ? 'salary' : 'commission';
+    const commissionPct = isReceptionist ? 0 : 40;
+    const [id] = await db.add('staff', [{ name: b.name, role: staffRole, specialties: b.specialties || [], branch: branch.name, branchId: branch.id, branchName: branch.name, chair: b.chair || '', phone: b.phone || '', accountEmail: b.accountEmail || '', accountStatus: b.accountStatus || 'pending', employmentStatus: 'active', compensationType, monthlySalary: isReceptionist ? monthlySalary : 0, commissionPct, status: b.status || 'available' }]);
     if (!id) return error('Failed to add staff', 500);
-    await audit('created', 'staff', { id, name: b.name, role: b.role || 'Staff', accountEmail: b.accountEmail || '', commissionPct: 40 }, b.actor || 'owner');
+    await audit('created', 'staff', { id, name: b.name, role: staffRole, accountEmail: b.accountEmail || '', compensationType, monthlySalary: isReceptionist ? monthlySalary : 0, commissionPct }, b.actor || 'owner');
     if (staffPhone && staffPin && currentContext()) {
       const context = currentContext()!;
-      await db.add('accounts', [{ id: `account-${randomBytes(8).toString('hex')}`, tenantId: context.tenantId, salonName: context.salonName, branchId: branch.id, name: b.name, email: '', phone: staffPhone, role: b.role || 'barber', status: 'active', passwordHash: passwordHash(staffPin), staffId: id, createdAt: Date.now() }]);
+      await db.add('accounts', [{ id: `account-${randomBytes(8).toString('hex')}`, tenantId: context.tenantId, salonName: context.salonName, branchId: branch.id, name: b.name, email: '', phone: staffPhone, role: staffRole, status: 'active', passwordHash: passwordHash(staffPin), staffId: id, createdAt: Date.now() }]);
     }
     return json({ id });
   }],
@@ -525,7 +538,8 @@ export const handler = router({
     if (!existing) return error('Staff not found', 404);
     const patch: any = body;
     const updated = { ...existing, ...patch };
-    updated.commissionPct = 40;
+    updated.compensationType = existing.compensationType || (String(existing.role || '').toLowerCase().includes('reception') ? 'salary' : 'commission');
+    updated.commissionPct = updated.compensationType === 'salary' ? 0 : 40;
     if (patch.employmentStatus === 'laid-off') updated.status = 'off';
     const [ok] = await db.update('staff', [{ id: params.id, record: updated }]);
     if (!ok) return error('Update failed', 500);
@@ -900,7 +914,10 @@ export const handler = router({
     const context = currentContext();
     if (context?.role !== 'owner') return error('Only the owner can view payroll staff', 403);
     const { items } = await db.listAllTenant('staff', context.tenantId, { limit: 2000 });
-    return json({ items });
+    return json({ items: (items as any[]).map(member => {
+      const isReceptionist = String(member.role || '').toLowerCase().includes('reception');
+      return { ...member, compensationType: member.compensationType || (isReceptionist ? 'salary' : 'commission'), monthlySalary: Number(member.monthlySalary || 0), commissionPct: isReceptionist ? 0 : Number(member.commissionPct ?? 40) };
+    }) });
   }],
   'POST /api/payouts': [async ({ body }) => {
     const context = currentContext();
@@ -925,9 +942,10 @@ export const handler = router({
       (order.items || []).forEach((item: any, index: number) => {
         if (item.type !== 'service' || !item.staffId || alreadyPaid.has(`${order.id}:${index}`)) return;
         const member = staffById.get(item.staffId);
-        if (!member) return;
+        if (!member || member.compensationType === 'salary' || String(member.role || '').toLowerCase().includes('reception')) return;
         const revenue = Number(item.lineTotalAfterDiscount ?? item.price * item.qty) || 0;
-        lines.push({ itemKey: `${order.id}:${index}`, orderId: order.id, staffId: item.staffId, staffName: item.staffName || member.name, revenue, commission: revenue * 0.4, currency: item.currency || 'KES', branchId: order.branchId || context.branchId || null, createdAt: now });
+        const commissionPct = Number(member.commissionPct ?? 40);
+        lines.push({ itemKey: `${order.id}:${index}`, orderId: order.id, staffId: item.staffId, staffName: item.staffName || member.name, revenue, commission: revenue * commissionPct / 100, commissionPct, currency: item.currency || 'KES', branchId: order.branchId || context.branchId || null, createdAt: now });
       });
     }
     if (!lines.length) return error('There are no unpaid commissions in this period.', 409);
@@ -942,6 +960,14 @@ export const handler = router({
     if (context?.role !== 'owner') return error('Only the owner can send payroll', 403);
     const recipients = Array.isArray(body?.recipients) ? body.recipients : [];
     if (!recipients.length) return error('Add at least one employee to payroll', 400);
+    const { items: salonStaff } = await db.listAllTenant('staff', context.tenantId, { limit: 2000 });
+    const staffById = new Map((salonStaff as any[]).map(member => [member.id, member]));
+    for (const recipient of recipients) {
+      const member: any = staffById.get(String(recipient.staffId || ''));
+      if (!member || member.employmentStatus === 'laid-off') return error('Payroll recipient is not an active staff member in this salon.', 400);
+      if (member.compensationType !== 'salary') return error(`${member.name} is commission-paid and cannot be included in salary payroll.`, 400);
+      if (Math.round(Number(recipient.amountKES)) !== Math.round(Number(member.monthlySalary))) return error(`Payroll amount for ${member.name} must match the saved monthly salary.`, 400);
+    }
     const initiator = process.env.MPESA_B2C_INITIATOR_NAME;
     const securityCredential = process.env.MPESA_B2C_SECURITY_CREDENTIAL;
     const shortcode = process.env.MPESA_B2C_SHORTCODE;
@@ -1028,7 +1054,7 @@ export const handler = router({
           if (p) productCost += (p.cost || 0) * it.qty;
         } else if (it.type === 'service') {
           const staff: any = it.staffId ? staffById.get(it.staffId) : null;
-          const pct = staff ? 40 : 0;
+          const pct = staff && staff.compensationType !== 'salary' && !String(staff.role || '').toLowerCase().includes('reception') ? Number(staff.commissionPct ?? 40) : 0;
           const serviceRevenueAfterDiscount = it.lineTotalAfterDiscount ?? it.price * it.qty;
           const comm = serviceRevenueAfterDiscount * (pct / 100);
           commissionsByCurrency[cur] = (commissionsByCurrency[cur] || 0) + comm;
@@ -1197,7 +1223,7 @@ export const handler = router({
       for (const o of orders as any[]) for (const it of (o.items || [])) {
         if (it.type === 'service' && it.staffId) {
           const staff: any = (staffAll as any[]).find(s => s.id === it.staffId);
-          const pct = staff ? 40 : 0;
+          const pct = staff && staff.compensationType !== 'salary' && !String(staff.role || '').toLowerCase().includes('reception') ? Number(staff.commissionPct ?? 40) : 0;
           const m = it.currency === 'USD' ? usdMap : kesMap;
           m.set(it.staffName, (m.get(it.staffName) || 0) + it.price * it.qty * (pct / 100));
         }
@@ -1209,7 +1235,9 @@ export const handler = router({
     }
 
     if (q.includes('salary') || q.includes('salaries') || q.includes('payroll')) {
-      return json({ answer: 'SafiGroom has no salary payroll. Employees are paid 40% commission on their completed service work.', grounded: true });
+      const salariedStaff = (staffAll as any[]).filter(member => member.compensationType === 'salary' || String(member.role || '').toLowerCase().includes('reception'));
+      const summary = salariedStaff.length ? `${salariedStaff.length} staff member${salariedStaff.length === 1 ? '' : 's'} are monthly-salary paid; commission-based service staff earn 40%.` : 'No monthly-salary staff are currently recorded; commission-based service staff earn 40%.';
+      return json({ answer: summary, grounded: true });
     }
 
     return json({ answer: "I can only answer from your actual recorded data right now \u2014 try asking about revenue (today/this week/this month), top staff, low stock, inactive customers, busiest hours, staff commissions, or expenses.", grounded: false });
