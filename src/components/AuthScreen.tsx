@@ -7,19 +7,28 @@ interface SalonOption { id: string; name: string; }
 
 export default function AuthScreen({ onAuthenticated }: { onAuthenticated: (account: any) => void }) {
   const [mode, setMode] = useState<'login' | 'signup'>('login');
-  const [form, setForm] = useState({ name: '', phone: '', email: '', password: '', salonId: '' });
+  const [form, setForm] = useState({ name: '', phone: '', email: '', password: '', salonId: '', branchId: '' });
   const [salons, setSalons] = useState<SalonOption[]>([]);
+  const [branches, setBranches] = useState<{ id: string; name: string }[]>([]);
+  const [loadingBranches, setLoadingBranches] = useState(false);
   const [busy, setBusy] = useState(false);
   const switchMode = (nextMode: 'login' | 'signup') => {
     setMode(nextMode);
-    if (nextMode === 'signup') setForm(previous => ({ ...previous, email: '', password: '' }));
+    if (nextMode === 'signup') setForm(previous => ({ ...previous, email: '', password: '', branchId: '' }));
   };
 
   useEffect(() => { PublicApi.salons().then(setSalons).catch(() => {}); }, []);
+  useEffect(() => {
+    if (mode !== 'signup' || !form.salonId) { setBranches([]); return; }
+    let active = true;
+    setLoadingBranches(true);
+    PublicApi.branches(form.salonId).then(items => { if (active) setBranches(items); }).catch(cause => { if (active) toast(cause instanceof Error ? cause.message : 'Could not load salon branches.', 'error'); }).finally(() => { if (active) setLoadingBranches(false); });
+    return () => { active = false; };
+  }, [mode, form.salonId]);
 
   const submit = async () => {
     if (!form.email.trim() || !form.password) { toast('Email or phone and password/PIN are required.', 'error'); return; }
-    if (mode === 'signup' && (!form.salonId || !form.name.trim() || !form.phone.trim())) { toast('Choose a salon and complete your client details.', 'error'); return; }
+    if (mode === 'signup' && (!form.salonId || !form.branchId || !form.name.trim() || !form.phone.trim() || !/^\d{4}$/.test(form.password))) { toast('Choose a salon and branch, complete your client details, and enter a 4-digit PIN.', 'error'); return; }
     setBusy(true);
     try {
       const account = mode === 'login' ? await AuthApi.login(form.email, form.password) : await AuthApi.signup(form);
@@ -56,12 +65,13 @@ export default function AuthScreen({ onAuthenticated }: { onAuthenticated: (acco
           </div>
           <form autoComplete="off" onSubmit={event => { event.preventDefault(); void submit(); }} className="space-y-4">
             {mode === 'signup' && <>
-              <Field label="Salon to visit" htmlFor="auth-salon"><Select id="auth-salon" name="signup-salon" autoComplete="off" value={form.salonId} onChange={e => setForm({ ...form, salonId: e.target.value })}><option value="">Choose an existing salon</option>{salons.map(salon => <option key={salon.id} value={salon.id}>{salon.name}</option>)}</Select></Field>
+              <Field label="Salon to visit" htmlFor="auth-salon"><Select id="auth-salon" name="signup-salon" autoComplete="off" value={form.salonId} onChange={e => setForm({ ...form, salonId: e.target.value, branchId: '' })}><option value="">Choose an existing salon</option>{salons.map(salon => <option key={salon.id} value={salon.id} className="text-[#1D1D1F] bg-white">{salon.name}</option>)}</Select></Field>
+              <Field label="Branch" htmlFor="auth-branch"><Select id="auth-branch" name="signup-branch" autoComplete="off" disabled={!form.salonId || loadingBranches} value={form.branchId || ''} onChange={e => setForm({ ...form, branchId: e.target.value })}><option value="">{loadingBranches ? 'Loading branches…' : form.salonId ? 'Choose a branch' : 'Choose a salon first'}</option>{branches.map(branch => <option key={branch.id} value={branch.id} className="text-[#1D1D1F] bg-white">{branch.name}</option>)}</Select></Field>
               <Field label="Full name" htmlFor="auth-name"><Input id="auth-name" name="signup-full-name" autoComplete="off" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} /></Field>
               <Field label="Phone" htmlFor="auth-phone"><Input id="auth-phone" name="signup-phone" autoComplete="off" type="tel" value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} /></Field>
             </>}
             <Field label={mode === 'login' ? 'Email or phone' : 'Email'} htmlFor="auth-email"><Input id="auth-email" name={mode === 'signup' ? 'signup-email' : 'login-identifier'} autoComplete="off" type={mode === 'signup' ? 'email' : 'text'} value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} /></Field>
-            <Field label="Password" htmlFor="auth-password"><Input id="auth-password" name={mode === 'signup' ? 'signup-secret' : 'login-secret'} autoComplete="new-password" type="password" value={form.password} onChange={e => setForm({ ...form, password: e.target.value })} /></Field>
+            <Field label={mode === 'signup' ? '4-digit PIN' : 'Password / PIN'} htmlFor="auth-password"><Input id="auth-password" name={mode === 'signup' ? 'signup-pin' : 'login-secret'} autoComplete="new-password" inputMode={mode === 'signup' ? 'numeric' : undefined} maxLength={mode === 'signup' ? 4 : undefined} pattern={mode === 'signup' ? '[0-9]{4}' : undefined} type="password" placeholder={mode === 'signup' ? '4 digits' : undefined} value={form.password} onChange={e => setForm({ ...form, password: mode === 'signup' ? e.target.value.replace(/\D/g, '').slice(0, 4) : e.target.value })} /></Field>
             <Button className="w-full" type="submit" disabled={busy}>{busy ? 'Please wait...' : mode === 'login' ? 'Log in' : 'Create client account'}</Button>
           </form>
           <p className="text-xs text-slate-200 border-t border-white/10 mt-6 pt-5">Salon and employee accounts are created by the platform administrator or salon owner.</p>

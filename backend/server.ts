@@ -43,7 +43,7 @@ async function resolveContext(request: any) {
   return { accountId: account.id, tenantId: account.tenantId, salonName: account.salonName, branchId, role, name: account.name, mustChangePin: Boolean(account.staffId && role !== 'receptionist' && (account.mustChangePin || !account.pinChangedAt)) };
 }
 
-const publicRoutes = new Set(['/api/_healthcheck', '/api/public/salons', '/api/public/branches', '/api/auth/login', '/api/auth/signup', '/api/mpesa/callback', '/api/payroll/timeout', '/api/payroll/result']);
+const publicRoutes = new Set(['/api/_healthcheck', '/api/public/salons', '/api/public/branches', '/api/public/review-appointments', '/api/public/reviews', '/api/auth/login', '/api/auth/signup', '/api/mpesa/callback', '/api/payroll/timeout', '/api/payroll/result']);
 
 for (const [definition, [routeHandler]] of Object.entries(handler.routes)) {
   const [method, path] = definition.split(' ');

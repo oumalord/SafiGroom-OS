@@ -64,7 +64,7 @@ export const AuthApi = {
     if (account) window.localStorage.setItem('safigroom_account', JSON.stringify({ ...account, mustChangePin: false }));
     return true;
   },
-  signup: async (payload: { name: string; email: string; phone: string; password: string; salonId: string }) => {
+  signup: async (payload: { name: string; email: string; phone: string; password: string; salonId: string; branchId?: string }) => {
     const result = await api.post('/api/auth/signup', payload);
     window.localStorage.setItem('safigroom_session', result.data.token);
     window.localStorage.setItem('safigroom_account', JSON.stringify(result.data.account));

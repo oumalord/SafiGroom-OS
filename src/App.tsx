@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Home, Calendar, Users, Scissors, Contact, ShoppingCart, Package, DollarSign, Sparkles, Menu, X, Tag, BarChart3, CreditCard, Percent, ClipboardList, Building2, MessageSquare } from 'lucide-react';
+import { Home, Calendar, Users, Scissors, Contact, ShoppingCart, Package, DollarSign, Sparkles, Menu, X, Tag, BarChart3, CreditCard, Percent, ClipboardList, Building2, MessageSquare, Star } from 'lucide-react';
 import { AuthApi, BranchesApi } from './lib/api';
 import { ToastHost, toast } from './components/ui';
 import type { Branch, Role } from './types';
@@ -24,8 +24,10 @@ import Admin from './tabs/Admin';
 import Messages from './tabs/Messages';
 import StaffPortal from './tabs/StaffPortal';
 import StaffPinGate from './components/StaffPinGate';
+import PublicReviewForm from './tabs/PublicReviewForm';
+import Reviews from './tabs/Reviews';
 
-type TabKey = 'dashboard' | 'appointments' | 'queue' | 'messages' | 'staff' | 'customers' | 'pos' | 'inventory' | 'services' | 'memberships' | 'promotions' | 'reports' | 'finance' | 'ai' | 'booking' | 'logs' | 'admin';
+type TabKey = 'dashboard' | 'appointments' | 'queue' | 'messages' | 'staff' | 'customers' | 'pos' | 'inventory' | 'services' | 'memberships' | 'promotions' | 'reports' | 'finance' | 'ai' | 'booking' | 'logs' | 'admin' | 'reviews';
 
 const TABS: { key: TabKey; label: string; icon: any; roles: Role[] }[] = [
   { key: 'dashboard', label: 'Dashboard', icon: Home, roles: ['owner', 'customer', 'barber'] },
@@ -44,6 +46,7 @@ const TABS: { key: TabKey; label: string; icon: any; roles: Role[] }[] = [
   { key: 'ai', label: 'AI Assistant', icon: Sparkles, roles: ['owner'] },
   { key: 'booking', label: 'Book Appointment', icon: Calendar, roles: ['customer'] },
   { key: 'logs', label: 'Audit Logs', icon: ClipboardList, roles: ['owner'] },
+  { key: 'reviews', label: 'Reviews', icon: Star, roles: ['owner'] },
   { key: 'admin', label: 'Admin', icon: Building2, roles: ['admin'] },
 ];
 
@@ -73,6 +76,7 @@ function App() {
   const [branches, setBranches] = useState<Branch[]>([]);
   const [selectedBranchId, setSelectedBranchId] = useState(() => window.localStorage.getItem('safigroom_selected_branch') || '');
   const effectiveRole = normalizeRole(account?.role);
+  const reviewSalonId = new URLSearchParams(window.location.search).get('review');
 
   useEffect(() => {
     if (effectiveRole !== 'owner' || account?.role === 'admin') return;
@@ -103,6 +107,8 @@ function App() {
   const visibleTabs = TABS.filter(t => t.roles.includes(effectiveRole) && (t.key !== 'admin' || account?.role === 'admin'));
   if (account?.role === 'admin') visibleTabs.sort((first, second) => (first.key === 'admin' ? -1 : second.key === 'admin' ? 1 : 0));
   const isOwner = effectiveRole === 'owner';
+
+  if (reviewSalonId) return <PublicReviewForm salonId={reviewSalonId} />;
 
   if (!account) return <AuthScreen onAuthenticated={authenticatedAccount => {
     setAccount(authenticatedAccount);
@@ -235,6 +241,7 @@ function App() {
                 {tab === 'ai' && <AIAssistant />}
                 {tab === 'booking' && <CustomerBooking />}
                 {tab === 'logs' && <AuditLogs />}
+                {tab === 'reviews' && effectiveRole === 'owner' && <Reviews />}
                 {tab === 'admin' && account?.role === 'admin' && <Admin />}
               </>
             )}

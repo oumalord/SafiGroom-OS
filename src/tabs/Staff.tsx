@@ -18,7 +18,7 @@ function StaffTab({ role = 'owner' }: { role?: Role }) {
   const [reviews, setReviews] = useState<Review[]>([]);
   const [branches, setBranches] = useState<Branch[]>([]);
   const [form, setForm] = useState({ name: '', role: 'Barber', chair: '', phone: '', pin: '', branchId: '', monthlySalary: '' });
-  useEffect(() => { ReviewsApi.list().then(setReviews); BranchesApi.list().then(loaded => { setBranches(loaded); setForm(current => ({ ...current, branchId: current.branchId || window.localStorage.getItem('safigroom_selected_branch') || loaded[0]?.id || '' })); }); }, []);
+  useEffect(() => { if (role === 'owner' || role === 'manager') ReviewsApi.list().then(setReviews).catch(() => {}); BranchesApi.list().then(loaded => { setBranches(loaded); setForm(current => ({ ...current, branchId: current.branchId || window.localStorage.getItem('safigroom_selected_branch') || loaded[0]?.id || '' })); }).catch(() => {}); }, [role]);
   const avgRating = (staffId: string) => {
     const mine = reviews.filter(r => r.staffId === staffId);
     if (mine.length === 0) return null;

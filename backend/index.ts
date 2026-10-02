@@ -338,6 +338,49 @@ export const handler = router({
     const { items } = await db.list('branches', { limit: 5000 });
     return json({ items: (items as any[]).filter(branch => branch.salonId === salonId && branch.status === 'active') });
   }],
+  'GET /api/public/review-appointments': [async ({ query }) => {
+    const salonId = String(query.salonId || '').trim();
+    const email = String(query.email || '').trim().toLowerCase();
+    const phone = normalizePhone(query.phone);
+    if (!salonId || (!email && !phone)) return error('Salon and booking email or phone are required', 400);
+    const [salon] = await db.get('salons', [salonId]);
+    if (!salon || salon.status !== 'active') return error('Salon not found', 404);
+    const [{ items: customers }, { items: appointments }, { items: reviews }] = await Promise.all([
+      db.listAllTenant('customers', salonId, { limit: 3000 }),
+      db.listAllTenant('appointments', salonId, { limit: 3000 }),
+      db.listAllTenant('reviews', salonId, { limit: 3000 }),
+    ]);
+    const customer = (customers as any[]).find(item => (email && String(item.email || '').trim().toLowerCase() === email) || (phone && normalizePhone(item.phone) === phone));
+    if (!customer) return json({ salonName: salon.name, customerName: '', items: [] });
+    const alreadyReviewed = new Set((reviews as any[]).filter(review => review.customerId === customer.id).map(review => review.appointmentId));
+    const eligible = (appointments as any[]).filter(appointment => appointment.customerId === customer.id && appointment.status === 'completed' && !alreadyReviewed.has(appointment.id)).map(appointment => ({ id: appointment.id, serviceName: appointment.serviceName, staffName: appointment.staffName || '', date: appointment.date, time: appointment.time }));
+    return json({ salonName: salon.name, customerName: customer.name, items: eligible });
+  }],
+  'POST /api/public/reviews': [async ({ body }) => {
+    const salonId = String(body?.salonId || '').trim();
+    const email = String(body?.email || '').trim().toLowerCase();
+    const phone = normalizePhone(body?.phone);
+    const appointmentId = String(body?.appointmentId || '');
+    const rating = Number(body?.rating);
+    if (!salonId || (!email && !phone) || !appointmentId) return error('Salon, booking email or phone, and completed appointment are required', 400);
+    if (!Number.isInteger(rating) || rating < 1 || rating > 5) return error('Rating must be between 1 and 5', 400);
+    const [salon] = await db.get('salons', [salonId]);
+    if (!salon || salon.status !== 'active') return error('Salon not found', 404);
+    const [{ items: customers }, { items: appointments }, { items: reviews }] = await Promise.all([
+      db.listAllTenant('customers', salonId, { limit: 3000 }),
+      db.listAllTenant('appointments', salonId, { limit: 3000 }),
+      db.listAllTenant('reviews', salonId, { limit: 3000 }),
+    ]);
+    const customer = (customers as any[]).find(item => (email && String(item.email || '').trim().toLowerCase() === email) || (phone && normalizePhone(item.phone) === phone));
+    if (!customer) return error('We could not match those details to a customer booking at this salon.', 404);
+    const appointment = (appointments as any[]).find(item => item.id === appointmentId && item.customerId === customer.id && item.status === 'completed');
+    if (!appointment) return error('Reviews are only available for your completed appointments.', 409);
+    if ((reviews as any[]).some(item => item.appointmentId === appointment.id && item.customerId === customer.id)) return error('This appointment already has a review.', 409);
+    const [id] = await db.add('reviews', [{ appointmentId: appointment.id, customerId: customer.id, customerName: customer.name, staffId: appointment.staffId || null, staffName: appointment.staffName || '', serviceName: appointment.serviceName || '', rating, comment: String(body?.comment || '').trim().slice(0, 2000), survey: body?.survey || {}, createdAt: Date.now(), branchId: appointment.branchId || null }]);
+    if (!id) return error('Review could not be saved.', 500);
+    await withRequestContext({ accountId: 'public-review', tenantId: salonId, salonName: salon.name, role: 'owner', name: customer.name }, () => audit('created', 'review', { id, customerName: customer.name, staffName: appointment.staffName || '', serviceName: appointment.serviceName || '', rating }, customer.name));
+    return json({ id });
+  }],
   'POST /api/auth/login': [async ({ body }) => {
     const identifier = String(body?.identifier || body?.email || '').trim();
     const password = String(body?.password || '');
@@ -370,14 +413,16 @@ export const handler = router({
     const password = String(body?.password || '');
     const phone = String(body?.phone || '').trim();
     const salonId = String(body?.salonId || '').trim();
-    if (!name || !email || password.length < 8) return error('Name, email and a password of at least 8 characters are required', 400);
+    if (!name || !email || !/^\d{4}$/.test(password)) return error('Name, email and a 4-digit PIN are required', 400);
     if (!salonId) return error('Choose a salon before creating a customer account', 400);
     const accounts = await db.list('accounts', { limit: 5000 });
     if ((accounts.items as any[]).some(account => String(account.email).toLowerCase() === email)) return error('An account with that email already exists', 409);
     const [salon] = await db.get('salons', [salonId]);
     if (!salon) return error('Selected salon was not found', 404);
     const { items: branches } = await db.list('branches', { limit: 5000 });
-    const branch = (branches as any[]).find(item => item.salonId === salonId && item.status === 'active');
+    const requestedBranchId = String(body?.branchId || '');
+    const branch = (branches as any[]).find(item => item.salonId === salonId && item.status === 'active' && item.id === requestedBranchId);
+    if (!branch) return error('Choose an active branch for the selected salon', 400);
     const branchId = branch?.id || '';
     const account = { id: `account-${randomBytes(8).toString('hex')}`, tenantId: salonId, salonName: salon.name, branchId, name, email, phone, role: 'customer', status: 'active', passwordHash: passwordHash(password), createdAt: Date.now() };
     await db.add('accounts', [account]);
@@ -1455,6 +1500,7 @@ export const handler = router({
   }],
 
   'GET /api/reviews': [async ({ query }) => {
+    if (!['owner', 'manager', 'admin'].includes(currentContext()?.role || '')) return error('Review details are available to the owner or manager only', 403);
     const { items } = await db.list('reviews', { limit: 500 });
     const staffId = query.staffId;
     return json({ items: staffId ? (items as any[]).filter(r => r.staffId === staffId) : items });
