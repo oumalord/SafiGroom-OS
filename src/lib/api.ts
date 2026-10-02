@@ -13,14 +13,20 @@ async function request(path: string, method = 'GET', body?: unknown): Promise<an
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), 15000);
   try {
-    const response = await fetch(path, {
-      method,
-      headers: { ...(body === undefined ? {} : { 'Content-Type': 'application/json' }), ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(branchId ? { 'X-Branch-ID': branchId } : {}) },
-      body: body === undefined ? undefined : JSON.stringify(body),
-      signal: controller.signal,
-    });
+    let response: Response;
+    try {
+      response = await fetch(path, {
+        method,
+        headers: { ...(body === undefined ? {} : { 'Content-Type': 'application/json' }), ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(branchId ? { 'X-Branch-ID': branchId } : {}) },
+        body: body === undefined ? undefined : JSON.stringify(body),
+        signal: controller.signal,
+      });
+    } catch (cause) {
+      if (cause instanceof Error && cause.name === 'AbortError') throw new Error(`The ${path} request timed out. Please try again.`);
+      throw new Error(`Could not reach the SafiGroom API (${path}). Check your connection and try again.`);
+    }
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.error || `Request failed (${response.status})`);
+    if (!response.ok) throw new Error(data.error || `Request to ${path} failed (${response.status})`);
     return data;
   } finally {
     window.clearTimeout(timeout);

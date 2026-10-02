@@ -17,7 +17,7 @@ function Messages({ role, accountId }: { role: Role; accountId: string }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
-  const [loadFailed, setLoadFailed] = useState(false);
+  const [loadError, setLoadError] = useState('');
   const [text, setText] = useState('');
   const endRef = useRef<HTMLDivElement>(null);
   const canSeeManagement = role === 'owner' || role === 'receptionist';
@@ -25,13 +25,13 @@ function Messages({ role, accountId }: { role: Role; accountId: string }) {
   useEffect(() => {
     let alive = true;
     setLoading(true);
-    setLoadFailed(false);
+    setLoadError('');
     const load = async () => {
       try {
         const loaded = await MessagesApi.list(channel);
         if (alive) setMessages(loaded);
-      } catch {
-        if (alive) setLoadFailed(true);
+      } catch (cause) {
+        if (alive) setLoadError(cause instanceof Error ? cause.message : 'Could not load messages.');
       } finally {
         if (alive) setLoading(false);
       }
@@ -50,7 +50,7 @@ function Messages({ role, accountId }: { role: Role; accountId: string }) {
     try {
       await MessagesApi.send({ channel, text: trimmed });
       setText('');
-      setLoadFailed(false);
+      setLoadError('');
       setMessages(await MessagesApi.list(channel));
     } catch (cause) {
       toast(cause instanceof Error ? cause.message : 'Message could not be sent. Please try again.', 'error');
@@ -90,7 +90,7 @@ function Messages({ role, accountId }: { role: Role; accountId: string }) {
         {channel === 'management' && <div className="flex items-center gap-2 bg-[#2F6BFF]/[0.04] px-4 py-2.5 text-xs text-[#52627a] sm:px-6"><LockKeyhole size={13} aria-hidden="true" />Only the owner and receptionist can view or send messages here.</div>}
 
         <div className="bg-[#FAFAFC] px-3 py-4 sm:px-6 sm:py-5">
-          {loadFailed && <p className="mb-3 rounded-xl bg-[#FF3B30]/[0.08] px-3 py-2 text-xs text-[#b0201a]" role="alert">Could not refresh messages. Check your connection; we will keep trying.</p>}
+          {loadError && <p className="mb-3 rounded-xl bg-[#FF3B30]/[0.08] px-3 py-2 text-xs text-[#b0201a]" role="alert">{loadError} <button type="button" className="ml-2 underline" onClick={() => MessagesApi.list(channel).then(loaded => { setMessages(loaded); setLoadError(''); }).catch(cause => setLoadError(cause instanceof Error ? cause.message : 'Could not load messages.'))}>Retry</button></p>}
           {loading ? <LoadingState label="Loading conversation…" /> : (
             <div className="flex min-h-[320px] max-h-[58vh] flex-col gap-4 overflow-y-auto px-1 py-2" role="log" aria-label={`${channel === 'management' ? 'Management' : 'Team'} messages`} aria-live="polite">
               {messages.length === 0 && <div className="m-auto max-w-xs py-12 text-center"><div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-white text-[#2F6BFF] shadow-sm"><MessageSquare size={21} aria-hidden="true" /></div><p className="font-medium">Start the conversation</p><p className="mt-1 text-sm text-[#6E6E73]">Send the first update to your team.</p></div>}

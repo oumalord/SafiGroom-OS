@@ -9,24 +9,36 @@ function Inventory() {
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState('');
+  const [loadError, setLoadError] = useState('');
   const [form, setForm] = useState({ name: '', category: 'Hair', color: '', price: 0, cost: 0, stock: 0, lowStockThreshold: 5, unit: 'pcs' });
 
-  const load = () => { ProductsApi.list().then(setProducts).catch(() => toast('Could not load inventory.', 'error')).finally(() => setLoading(false)); };
+  const load = () => { ProductsApi.list().then(items => { setProducts(items); setLoadError(''); }).catch(cause => { const message = cause instanceof Error ? cause.message : 'Could not load inventory.'; setLoadError(message); toast(message, 'error'); }).finally(() => setLoading(false)); };
   useEffect(load, []);
 
   const addProduct = async () => {
-    if (!form.name.trim()) { toast('Product name is required.', 'error'); return; }
-    await ProductsApi.create(form);
-    toast('Product added.', 'success');
-    setOpen(false);
-    setForm({ name: '', category: 'Hair', color: '', price: 0, cost: 0, stock: 0, lowStockThreshold: 5, unit: 'pcs' });
-    load();
+    if (saving) return;
+    if (!form.name.trim()) { setFormError('Product name is required.'); return; }
+    setSaving(true);
+    setFormError('');
+    try {
+      await ProductsApi.create(form);
+      toast('Product added.', 'success');
+      setOpen(false);
+      setForm({ name: '', category: 'Hair', color: '', price: 0, cost: 0, stock: 0, lowStockThreshold: 5, unit: 'pcs' });
+      load();
+    } catch (cause) {
+      setFormError(cause instanceof Error ? cause.message : 'Could not add product. Please try again.');
+    } finally {
+      setSaving(false);
+    }
   };
 
   const adjustStock = async (p: Product, delta: number) => {
     const newStock = Math.max(0, p.stock + delta);
-    await ProductsApi.update(p.id, { stock: newStock });
-    load();
+    try { await ProductsApi.update(p.id, { stock: newStock }); load(); }
+    catch (cause) { toast(cause instanceof Error ? cause.message : 'Could not update stock.', 'error'); }
   };
 
   if (loading) return <LoadingState label="Loading inventory…" />;
@@ -37,8 +49,9 @@ function Inventory() {
         <div><h1 className="text-2xl font-semibold tracking-tight">Inventory</h1><p className="text-sm text-[#6E6E73]">{products.length} products tracked</p></div>
         <Button onClick={() => setOpen(true)}><Plus size={16} aria-hidden="true" />Add Product</Button>
       </div>
+      {loadError && <p className="rounded-xl bg-[#FF3B30]/10 px-4 py-3 text-sm text-[#b0201a]" role="alert">{loadError} <button className="ml-2 underline" onClick={load}>Retry</button></p>}
 
-      {products.length === 0 ? <EmptyState icon={PackageIcon} title="No products yet" description="Add products to start tracking stock." /> : (
+      {products.length === 0 ? <EmptyState icon={PackageIcon} title="No products yet" description="Your clean system has no inventory records yet. Add products here to track stock and make them available at checkout." action={<Button onClick={() => { setFormError(''); setOpen(true); }}><Plus size={15} aria-hidden="true" />Add Product</Button>} /> : (
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {products.map(p => {
             const low = p.stock <= p.lowStockThreshold;
@@ -65,11 +78,11 @@ function Inventory() {
       )}
 
       {open && (
-        <Modal title="Add Product" onClose={() => setOpen(false)} footer={<>
-          <Button variant="secondary" onClick={() => setOpen(false)}>Cancel</Button>
-          <Button onClick={addProduct}>Add Product</Button>
+        <Modal title="Add Product" onClose={() => { if (!saving) setOpen(false); }} footer={<>
+          <Button variant="secondary" onClick={() => setOpen(false)} disabled={saving}>Cancel</Button>
+          <Button type="submit" form="add-product-form" disabled={saving}>{saving ? 'Adding…' : 'Add Product'}</Button>
         </>}>
-          <div className="space-y-4">
+          <form id="add-product-form" onSubmit={event => { event.preventDefault(); void addProduct(); }} className="space-y-4">
             <Field label="Product name" htmlFor="p-name"><Input id="p-name" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} /></Field>
             <Field label="Category" htmlFor="p-cat"><Select id="p-cat" value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value }))}>{categories.map(category => <option key={category} value={category}>{category}</option>)}</Select></Field>
             <Field label="Color" htmlFor="p-color"><Input id="p-color" value={form.color} onChange={e => setForm(f => ({ ...f, color: e.target.value }))} placeholder="e.g. Black, Brown, Blonde, Natural" /></Field>
@@ -84,7 +97,8 @@ function Inventory() {
                 <option value="pcs">pcs</option><option value="ml">ml</option><option value="bottle">bottle</option><option value="g">g</option>
               </Select>
             </Field>
-          </div>
+            {formError && <p className="rounded-xl bg-[#FF3B30]/10 px-3 py-2 text-sm text-[#b0201a]" role="alert">{formError}</p>}
+          </form>
         </Modal>
       )}
     </div>

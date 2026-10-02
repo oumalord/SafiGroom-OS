@@ -613,8 +613,11 @@ export const handler = router({
   'POST /api/services': [async ({ body }) => {
     if (!['owner', 'manager'].includes(currentContext()?.role || '')) return error('Only the owner or manager can add services', 403);
     const b: any = body;
-    if (!b.name || !b.price) return error('Name and price are required', 400);
-    const [id] = await db.add('services', [{ name: b.name, category: b.category || 'General', price: b.price, currency: b.currency === 'USD' ? 'USD' : 'KES', durationMin: b.durationMin || 30, description: b.description || '' }]);
+    const price = Number(b.price);
+    const durationMin = Number(b.durationMin || 30);
+    if (!String(b.name || '').trim() || !Number.isFinite(price) || price <= 0) return error('Service name and a positive price are required', 400);
+    if (!Number.isFinite(durationMin) || durationMin < 5 || durationMin > 1440) return error('Service duration must be between 5 and 1,440 minutes', 400);
+    const [id] = await db.add('services', [{ name: String(b.name).trim(), category: b.category || 'General', price, currency: b.currency === 'USD' ? 'USD' : 'KES', durationMin, description: b.description || '' }]);
     if (!id) return error('Failed to add service', 500);
     await audit('created', 'service', { id, name: b.name, category: b.category || 'General', price: b.price, currency: b.currency === 'USD' ? 'USD' : 'KES' }, b.actor || 'owner');
     return json({ id });
@@ -818,7 +821,9 @@ export const handler = router({
     if (currentContext()?.role !== 'owner') return error('Only the owner can add inventory', 403);
     const b: any = body;
     if (!b.name) return error('Product name is required', 400);
-    const [id] = await db.add('products', [{ name: b.name, category: b.category || 'Other', color: b.color || '', price: b.price || 0, cost: b.cost || 0, stock: b.stock || 0, lowStockThreshold: b.lowStockThreshold ?? 5, unit: b.unit || 'pcs' }]);
+    const numeric = { price: Number(b.price || 0), cost: Number(b.cost || 0), stock: Number(b.stock || 0), lowStockThreshold: Number(b.lowStockThreshold ?? 5) };
+    if (Object.values(numeric).some(value => !Number.isFinite(value) || value < 0)) return error('Price, cost, stock, and threshold must be non-negative numbers', 400);
+    const [id] = await db.add('products', [{ name: String(b.name).trim(), category: b.category || 'Other', color: b.color || '', ...numeric, unit: b.unit || 'pcs' }]);
     if (!id) return error('Failed to add product', 500);
     await audit('created', 'product', { id, name: b.name, stock: b.stock || 0, unit: b.unit || 'pcs' }, b.actor || 'owner');
     return json({ id });
@@ -1314,15 +1319,22 @@ export const handler = router({
     if (!text) return error('Message text is required', 400);
     if (text.length > 2000) return error('Messages must be 2,000 characters or fewer', 400);
     const createdAt = Date.now();
-    const [id] = await db.add('messages', [{
-      channel,
-      senderId: context.accountId,
-      senderName: context.name,
-      senderRole: context.role,
-      text,
-      createdAt,
-    }]);
-    return json({ id, channel, senderId: context.accountId, senderName: context.name, senderRole: context.role, text, createdAt });
+    try {
+      const [id] = await db.add('messages', [{
+        channel,
+        senderId: context.accountId,
+        senderName: context.name,
+        senderRole: context.role,
+        text,
+        createdAt,
+      }]);
+      if (!id) return error('Message could not be saved. Please retry.', 500);
+      try { await audit('created', 'message', { id, channel, senderName: context.name }, context.name || context.role); }
+      catch (auditError) { console.error('Message saved but audit logging failed', auditError); }
+      return json({ id, channel, senderId: context.accountId, senderName: context.name, senderRole: context.role, text, createdAt });
+    } catch {
+      return error('Message could not be saved. Check your connection and try again.', 503);
+    }
   }],
 
   'GET /api/memberships': [async () => { const { items } = await db.list('membership_plans', { limit: 50 }); return json({ items }); }],

@@ -8,18 +8,30 @@ function Services() {
   const [services, setServices] = useState<ServiceItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [loadError, setLoadError] = useState('');
+  const [formError, setFormError] = useState('');
   const [form, setForm] = useState({ name: '', category: '', price: 0, currency: 'KES' as Currency, durationMin: 30, description: '' });
 
-  const load = () => { ServicesApi.list().then(setServices).catch(() => toast('Could not load services.', 'error')).finally(() => setLoading(false)); };
+  const load = () => { ServicesApi.list().then(items => { setServices(items); setLoadError(''); }).catch(cause => { const message = cause instanceof Error ? cause.message : 'Could not load services.'; setLoadError(message); toast(message, 'error'); }).finally(() => setLoading(false)); };
   useEffect(load, []);
 
   const addService = async () => {
-    if (!form.name.trim() || form.price <= 0) { toast('Enter a service name and a price greater than zero.', 'error'); return; }
-    await ServicesApi.create(form);
-    toast('Service added to the catalog.', 'success');
-    setOpen(false);
-    setForm({ name: '', category: '', price: 0, currency: 'KES', durationMin: 30, description: '' });
-    load();
+    if (saving) return;
+    if (!form.name.trim() || form.price <= 0) { setFormError('Enter a service name and a price greater than zero.'); return; }
+    setSaving(true);
+    setFormError('');
+    try {
+      await ServicesApi.create(form);
+      toast('Service added to the catalog.', 'success');
+      setOpen(false);
+      setForm({ name: '', category: '', price: 0, currency: 'KES', durationMin: 30, description: '' });
+      load();
+    } catch (cause) {
+      setFormError(cause instanceof Error ? cause.message : 'Could not add service. Please try again.');
+    } finally {
+      setSaving(false);
+    }
   };
 
   const categories = Array.from(new Set(services.map(s => s.category)));
@@ -33,7 +45,8 @@ function Services() {
         <Button onClick={() => setOpen(true)}><Plus size={16} aria-hidden="true" />Add Service</Button>
       </div>
 
-      {services.length === 0 ? <EmptyState icon={Tag} title="No services yet" description="Add your first service to the catalog." /> : (
+      {loadError && <p className="rounded-xl bg-[#FF3B30]/10 px-4 py-3 text-sm text-[#b0201a]" role="alert">{loadError} <button className="ml-2 underline" onClick={load}>Retry</button></p>}
+      {services.length === 0 ? <EmptyState icon={Tag} title="No services yet" description="Your clean system has no service records yet. Add services here before booking appointments." action={<Button onClick={() => { setFormError(''); setOpen(true); }}><Plus size={15} aria-hidden="true" />Add Service</Button>} /> : (
         <div className="space-y-6">
           {categories.map(cat => (
             <div key={cat}>
@@ -53,11 +66,11 @@ function Services() {
       )}
 
       {open && (
-        <Modal title="Add Service" onClose={() => setOpen(false)} footer={<>
-          <Button variant="secondary" onClick={() => setOpen(false)}>Cancel</Button>
-          <Button onClick={addService}>Add Service</Button>
+        <Modal title="Add Service" onClose={() => { if (!saving) setOpen(false); }} footer={<>
+          <Button variant="secondary" onClick={() => setOpen(false)} disabled={saving}>Cancel</Button>
+          <Button type="submit" form="add-service-form" disabled={saving}>{saving ? 'Adding…' : 'Add Service'}</Button>
         </>}>
-          <div className="space-y-4">
+          <form id="add-service-form" onSubmit={event => { event.preventDefault(); void addService(); }} className="space-y-4">
             <Field label="Service name" htmlFor="sv-name"><Input id="sv-name" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} /></Field>
             <Field label="Category" htmlFor="sv-cat"><Input id="sv-cat" value={form.category} onChange={e => setForm(f => ({ ...f, category: e.target.value }))} placeholder="e.g. Barber, Salon, Spa" /></Field>
             <div className="grid grid-cols-2 gap-3">
@@ -71,7 +84,8 @@ function Services() {
             </div>
             <Field label="Duration (minutes)" htmlFor="sv-dur"><Input id="sv-dur" type="number" min={5} value={form.durationMin} onChange={e => setForm(f => ({ ...f, durationMin: Number(e.target.value) }))} /></Field>
             <Field label="Description (optional)" htmlFor="sv-desc"><Input id="sv-desc" value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} /></Field>
-          </div>
+            {formError && <p className="rounded-xl bg-[#FF3B30]/10 px-3 py-2 text-sm text-[#b0201a]" role="alert">{formError}</p>}
+          </form>
         </Modal>
       )}
     </div>

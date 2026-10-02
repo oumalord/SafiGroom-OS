@@ -20,6 +20,8 @@ function Appointments({ role }: { role: Role }) {
   const [staff, setStaff] = useState<Staff[]>([]);
   const [services, setServices] = useState<ServiceItem[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
+  const [optionsLoading, setOptionsLoading] = useState(true);
+  const [optionsError, setOptionsError] = useState('');
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -27,9 +29,20 @@ function Appointments({ role }: { role: Role }) {
   const [editing, setEditing] = useState<Appointment | null>(null);
   const [editForm, setEditForm] = useState({ serviceId: '', date: '', time: '', staffId: '' });
 
-  useEffect(() => {
-    Promise.all([StaffApi.list(), ServicesApi.list(), CustomersApi.list()]).then(([s, sv, c]) => { setStaff(s); setServices(sv); setCustomers(c); });
-  }, []);
+  const loadOptions = () => {
+    setOptionsLoading(true);
+    const customersRequest = role === 'owner' || role === 'manager' ? CustomersApi.list() : Promise.resolve([] as Customer[]);
+    Promise.all([StaffApi.list(), ServicesApi.list(), customersRequest])
+      .then(([loadedStaff, loadedServices, loadedCustomers]) => {
+        setStaff(loadedStaff);
+        setServices(loadedServices);
+        setCustomers(loadedCustomers);
+        setOptionsError('');
+      })
+      .catch(cause => setOptionsError(cause instanceof Error ? cause.message : 'Could not load appointment options.'))
+      .finally(() => setOptionsLoading(false));
+  };
+  useEffect(loadOptions, [role]);
 
   useEffect(() => {
     setLoading(true);
@@ -47,15 +60,11 @@ function Appointments({ role }: { role: Role }) {
     if (!service) return;
     setSaving(true);
     try {
-      let customerId = customer?.id || null;
-      if (!customerId && form.customerName.trim()) {
-        const created = await CustomersApi.create({ name: form.customerName, phone: form.customerPhone, email: form.customerEmail, notes: '' });
-        customerId = created.data.id;
-      }
       const { data } = await AppointmentsApi.create({
-        customerId,
+        customerId: customer?.id || null,
         customerName: customer?.name || form.customerName,
         customerEmail: customer?.email || form.customerEmail,
+        customerPhone: customer?.phone || form.customerPhone,
         serviceId: service.id, serviceName: service.name,
         staffId: staffMember?.id || null, staffName: staffMember?.name || null,
         date, time: form.time, durationMin: service.durationMin, price: service.price,
@@ -65,7 +74,7 @@ function Appointments({ role }: { role: Role }) {
       setForm({ customerId: '', customerName: '', customerPhone: '', customerEmail: '', serviceId: '', staffId: '', time: '10:00' });
       reload();
     } catch (e: any) {
-      toast(e?.response?.data?.error || 'That time slot is not available.', 'error');
+      toast(e instanceof Error ? e.message : e?.response?.data?.error || 'That time slot is not available.', 'error');
     } finally {
       setSaving(false);
     }
@@ -151,6 +160,8 @@ function Appointments({ role }: { role: Role }) {
         </div>
       </div>
 
+      {optionsError && <p className="rounded-xl bg-[#FF3B30]/10 px-4 py-3 text-sm text-[#b0201a]" role="alert">Appointment options could not load: {optionsError} <button className="ml-2 underline" onClick={loadOptions}>Retry</button></p>}
+
       {loading ? <LoadingState label="Loading appointments…" /> : sorted.length === 0 ? (
         <EmptyState icon={Calendar} title="No appointments" description="There are no appointments scheduled for this date yet." action={<Button onClick={() => setOpen(true)}>Book an appointment</Button>} />
       ) : (
@@ -186,15 +197,18 @@ function Appointments({ role }: { role: Role }) {
       {open && (
         <Modal title="New Appointment" onClose={() => setOpen(false)} footer={<>
           <Button variant="secondary" onClick={() => setOpen(false)}>Cancel</Button>
-          <Button onClick={handleCreate} disabled={saving}>{saving ? 'Booking…' : 'Book Appointment'}</Button>
+          <Button onClick={handleCreate} disabled={saving || optionsLoading || services.length === 0}>{saving ? 'Booking…' : 'Book Appointment'}</Button>
         </>}>
           <div className="space-y-4">
-            <Field label="Customer" htmlFor="appt-customer">
+            {optionsLoading && <p className="text-sm text-[#6E6E73]" role="status">Loading service and staff options…</p>}
+            {!optionsLoading && services.length === 0 && <p className="rounded-xl bg-[#FF9500]/10 px-3 py-2 text-sm text-[#805000]">There are no services in the catalog yet. The owner or manager can add services from the Services tab.</p>}
+            {!optionsLoading && staff.length === 0 && <p className="rounded-xl bg-[#FF9500]/10 px-3 py-2 text-sm text-[#805000]">There are no staff accounts yet. The owner or manager can add staff; employee assignment can also be done later.</p>}
+            {(role === 'owner' || role === 'manager') && <Field label="Customer" htmlFor="appt-customer">
               <Select id="appt-customer" value={form.customerId} onChange={e => setForm(f => ({ ...f, customerId: e.target.value }))}>
                 <option value="">— New / walk-in customer —</option>
                 {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
               </Select>
-            </Field>
+            </Field>}
             {!form.customerId && (
               <>
                 <Field label="Customer name" htmlFor="appt-customer-name">
@@ -209,15 +223,15 @@ function Appointments({ role }: { role: Role }) {
               </>
             )}
             <Field label="Service" htmlFor="appt-service">
-              <Select id="appt-service" value={form.serviceId} onChange={e => setForm(f => ({ ...f, serviceId: e.target.value }))}>
-                <option value="">Select a service</option>
+              <Select id="appt-service" value={form.serviceId} disabled={optionsLoading || services.length === 0} onChange={e => setForm(f => ({ ...f, serviceId: e.target.value }))}>
+                <option value="">{optionsLoading ? 'Loading services…' : services.length ? 'Select a service' : 'No services available'}</option>
                 {services.map(s => <option key={s.id} value={s.id}>{s.name} — {fmtKES(s.price)} ({s.durationMin} min)</option>)}
               </Select>
             </Field>
             <Field label="Employee (optional; receptionist can assign later)" htmlFor="appt-staff">
               <Select id="appt-staff" value={form.staffId} onChange={e => setForm(f => ({ ...f, staffId: e.target.value }))}>
-                <option value="">Assign later</option>
-                {staff.filter(s => s.status === 'available').map(s => <option key={s.id} value={s.id}>{s.name} — {s.role}</option>)}
+                <option value="">{staff.length ? 'Assign later' : 'No staff accounts available'}</option>
+                {staff.filter(s => s.employmentStatus !== 'laid-off').map(s => <option key={s.id} value={s.id}>{s.name} — {s.role} ({s.status})</option>)}
               </Select>
             </Field>
             <Field label="Time" htmlFor="appt-time">
