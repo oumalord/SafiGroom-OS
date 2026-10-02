@@ -5,7 +5,7 @@ import { CustomersApi, ServicesApi, ProductsApi, StaffApi, OrdersApi, fmtMoney }
 import { MpesaPayModal } from '../components/MpesaPay';
 import type { Customer, ServiceItem, Product, Staff, Currency } from '../types';
 
-interface CartLine { key: string; type: 'service' | 'product'; refId: string; name: string; price: number; currency: Currency; qty: number; staffId?: string; staffName?: string; }
+interface CartLine { key: string; type: 'service' | 'product'; refId: string; name: string; price: number; currency: Currency; qty: number; staffId?: string; staffName?: string; assistantId?: string; assistantName?: string; assistantFee?: number; }
 
 function POS({ onSaleComplete }: { onSaleComplete: () => void }) {
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -40,6 +40,11 @@ function POS({ onSaleComplete }: { onSaleComplete: () => void }) {
     const s = staff.find(x => x.id === staffId);
     setCart(c => c.map(l => l.key === key ? { ...l, staffId: s?.id, staffName: s?.name } : l));
   };
+  const setLineAssistant = (key: string, assistantId: string) => {
+    const assistant = staff.find(member => member.id === assistantId);
+    setCart(lines => lines.map(line => line.key === key ? { ...line, assistantId: assistant?.id, assistantName: assistant?.name, assistantFee: assistant ? Number(line.assistantFee || 0) : 0 } : line));
+  };
+  const setAssistantFee = (key: string, assistantFee: number) => setCart(lines => lines.map(line => line.key === key ? { ...line, assistantFee: Math.max(0, assistantFee) } : line));
   const setLineQty = (key: string, qty: number) => setCart(c => c.map(l => l.key === key ? { ...l, qty: Math.max(1, qty) } : l));
 
   const currencies = Array.from(new Set(cart.map(l => l.currency)));
@@ -56,10 +61,10 @@ function POS({ onSaleComplete }: { onSaleComplete: () => void }) {
       const { data } = await OrdersApi.checkout({
         customerId: selectedCustomer?.id || null,
         customerName: selectedCustomer?.name || 'Walk-in Customer',
-        items: cart.map(l => ({ type: l.type, refId: l.refId, name: l.name, price: l.price, currency: l.currency, qty: l.qty, staffId: l.staffId || null, staffName: l.staffName || null })),
+        items: cart.map(l => ({ type: l.type, refId: l.refId, name: l.name, price: l.price, currency: l.currency, qty: l.qty, staffId: l.staffId || null, staffName: l.staffName || null, assistantId: l.assistantId || null, assistantName: l.assistantName || null, assistantFee: l.assistantId ? Number(l.assistantFee || 0) : 0 })),
         discountPct, paymentMethod, promoCode: promoCode.trim() || undefined, redeemPoints: redeemPoints || undefined, mpesaReceiptNumber,
       });
-      setReceipt({ ...data, customerName: selectedCustomer?.name || 'Walk-in Customer', items: cart, paymentMethod });
+      setReceipt({ ...data, customerName: selectedCustomer?.name || 'Walk-in Customer', items: cart, paymentMethod, discountPctApplied: discountPct });
       setCart([]); setDiscountPct(0); setCustomerId(''); setPromoCode(''); setRedeemPoints(0); setShowPay(false);
       onSaleComplete();
     } catch {
@@ -74,6 +79,10 @@ function POS({ onSaleComplete }: { onSaleComplete: () => void }) {
     if (cart.length === 0) { toast('Cart is empty.', 'error'); return; }
     const missingStaff = cart.find(l => l.type === 'service' && !l.staffId);
     if (missingStaff) { toast('Assign a staff member to every service before checkout.', 'error'); return; }
+    const invalidAssistant = cart.find(line => line.type === 'service' && line.assistantId && (!Number.isFinite(Number(line.assistantFee)) || Number(line.assistantFee) <= 0 || Number(line.assistantFee) > line.price));
+    if (invalidAssistant) { toast(`Enter an assistant fee greater than zero and no more than ${fmtMoney(invalidAssistant.price, invalidAssistant.currency)} for ${invalidAssistant.name}.`, 'error'); return; }
+    const samePerson = cart.find(line => line.type === 'service' && line.assistantId && line.assistantId === line.staffId);
+    if (samePerson) { toast('Choose a different person for assistant and primary staff.', 'error'); return; }
     const kesDue = totalByCurrency.KES || 0;
     if (paymentMethod === 'M-Pesa' && kesDue > 0) {
       setShowPay(true);
@@ -143,10 +152,18 @@ function POS({ onSaleComplete }: { onSaleComplete: () => void }) {
                     </div>
                   )}
                   {l.type === 'service' && (
-                    <Select aria-label={`Assign staff for ${l.name}`} className="mt-1 text-xs py-1.5" value={l.staffId || ''} onChange={e => setLineStaff(l.key, e.target.value)}>
-                      <option value="">Assign staff…</option>
-                      {staff.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-                    </Select>
+                    <div className="mt-2 space-y-2">
+                      <Select aria-label={`Assign primary staff for ${l.name}`} className="text-xs py-1.5" value={l.staffId || ''} onChange={e => setLineStaff(l.key, e.target.value)}>
+                        <option value="">Select primary staff…</option>
+                        {staff.filter(member => member.employmentStatus !== 'laid-off').map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                      </Select>
+                      <Select aria-label={`Assign assistant for ${l.name} (optional)`} className="text-xs py-1.5" value={l.assistantId || ''} onChange={e => setLineAssistant(l.key, e.target.value)}>
+                        <option value="">No assistant</option>
+                        {staff.filter(member => member.employmentStatus !== 'laid-off' && member.id !== l.staffId).map(member => <option key={member.id} value={member.id}>{member.name}</option>)}
+                      </Select>
+                      {l.assistantId && <Field label="Assistant fee per service" htmlFor={`assistant-fee-${l.key}`}><Input id={`assistant-fee-${l.key}`} type="number" min="0" max={l.price} step="1" value={l.assistantFee || ''} onChange={event => setAssistantFee(l.key, Number(event.target.value))} placeholder={l.currency} /></Field>}
+                      {l.assistantId && <p className="text-[11px] text-[#6E6E73]">Assistant fee: {fmtMoney(Number(l.assistantFee || 0) * l.qty, l.currency)}. Primary commission is based on {fmtMoney(Math.max(0, l.price * l.qty * (1 - discountPct / 100) - Number(l.assistantFee || 0) * l.qty), l.currency)} after discount and assistant fee.</p>}
+                    </div>
                   )}
                 </div>
               ))}
@@ -200,7 +217,10 @@ function POS({ onSaleComplete }: { onSaleComplete: () => void }) {
             <p className="font-medium">{receipt.customerName}</p>
             <ul className="divide-y divide-black/5">
               {receipt.items.map((l: CartLine) => (
-                <li key={l.key} className="py-2 flex justify-between"><span>{l.name} × {l.qty}</span><span>{fmtMoney(l.price * l.qty, l.currency)}</span></li>
+                <li key={l.key} className="py-2">
+                  <div className="flex justify-between"><span>{l.name} × {l.qty}</span><span>{fmtMoney(l.price * l.qty, l.currency)}</span></div>
+                  {l.type === 'service' && l.assistantId && <p className="mt-1 text-xs text-[#6E6E73]">Assistant: {l.assistantName} · fee {fmtMoney(Number(l.assistantFee || 0) * l.qty, l.currency)} · primary commission base {fmtMoney(Math.max(0, l.price * l.qty * (1 - Number(receipt.discountPctApplied || 0) / 100) - Number(l.assistantFee || 0) * l.qty), l.currency)}</p>}
+                </li>
               ))}
             </ul>
             <div className="border-t border-black/5 pt-3 space-y-1">

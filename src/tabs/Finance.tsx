@@ -66,6 +66,7 @@ function Finance() {
 
   const revenueKES = data?.revenueByCurrency.KES || 0;
   const commissionsKES = data?.commissionsByCurrency.KES || 0;
+  const assistantFeesKES = data?.assistantFeesByCurrency.KES || 0;
   const profitKES = data?.estimatedProfitByCurrency.KES || 0;
 
   return (
@@ -77,7 +78,7 @@ function Finance() {
             <option value="today">Today</option><option value="week">This Week</option><option value="month">This Month</option><option value="all">All Time</option>
           </Select>
           <Button onClick={() => setOpen(true)}><Plus size={16} aria-hidden="true" />Add Expense</Button>
-          <Button variant="secondary" onClick={recordPayout} disabled={paying}>{paying ? 'Recording…' : `Mark ${range} commissions paid`}</Button>
+          <Button variant="secondary" onClick={recordPayout} disabled={paying}>{paying ? 'Recording…' : `Record ${range} staff payouts`}</Button>
         </div>
       </div>
 
@@ -87,7 +88,7 @@ function Finance() {
             <StatCard label="Revenue" value={fmtMoney(revenueKES, 'KES')} icon={Receipt} tone="success" />
             <StatCard label="Product Cost" value={fmtMoney(data.productCost, 'KES')} icon={Receipt} />
             <StatCard label="Commissions Owed" value={fmtMoney(commissionsKES, 'KES')} icon={Receipt} />
-            <StatCard label="Commission Rate" value="40%" sub="Commission-paid service staff" icon={Receipt} tone="warning" />
+            <StatCard label="Assistant Fees" value={fmtMoney(assistantFeesKES, 'KES')} sub="Deducted from service revenue" icon={Receipt} tone="warning" />
           </div>
           <Card className="p-6">
             <h2 className="font-semibold mb-4">Profitability Breakdown</h2>
@@ -95,10 +96,11 @@ function Finance() {
               <div className="flex justify-between"><span className="text-[#6E6E73]">Revenue</span><span>{fmtMoney(revenueKES, 'KES')}</span></div>
               <div className="flex justify-between"><span className="text-[#6E6E73]">− Product cost (inventory consumed)</span><span>-{fmtMoney(data.productCost, 'KES')}</span></div>
               <div className="flex justify-between"><span className="text-[#6E6E73]">− Staff commissions</span><span>-{fmtMoney(commissionsKES, 'KES')}</span></div>
+              <div className="flex justify-between"><span className="text-[#6E6E73]">− Assistant fees</span><span>-{fmtMoney(assistantFeesKES, 'KES')}</span></div>
               <div className="flex justify-between"><span className="text-[#6E6E73]">− Recorded expenses</span><span>-{fmtMoney(data.expenseTotal, 'KES')}</span></div>
               <div className="flex justify-between font-semibold text-base border-t border-black/5 pt-2 mt-2"><span>Net Profit</span><span className={profitKES >= 0 ? 'text-[#1c7c34]' : 'text-[#b0201a]'}>{fmtMoney(profitKES, 'KES')}</span></div>
             </div>
-            <p className="text-xs text-[#6E6E73] mt-3">Monthly salaries are managed separately in Payroll. See Reports for the commission-paid staff statement.</p>
+            <p className="text-xs text-[#6E6E73] mt-3">Primary staff commission is calculated after assistant fees. Monthly salaries are managed separately in Payroll.</p>
           </Card>
           <Card className="p-6">
             <h2 className="font-semibold mb-4">Payment Methods</h2>

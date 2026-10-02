@@ -24,6 +24,10 @@ export interface StaffPortalDashboard {
   waitingNow: number;
   dailyEarningsKES: number;
   weeklyEarningsKES: number;
+  dailyCommissionKES: number;
+  dailyAssistantFeesKES: number;
+  weeklyCommissionKES: number;
+  weeklyAssistantFeesKES: number;
   clientsServedToday: number;
   weekStartsAt: number;
 }
@@ -136,6 +140,11 @@ export interface OrderItem {
   qty: number;
   staffId?: string | null;
   staffName?: string | null;
+  assistantId?: string | null;
+  assistantName?: string | null;
+  assistantFee?: number;
+  assistantFeeAfterDiscount?: number;
+  commissionableAmount?: number;
 }
 
 export interface Order {
@@ -205,6 +214,7 @@ export interface DashboardData {
   expenseTotal: number;
   productCost: number;
   commissionsByCurrency: Record<string, number>;
+  assistantFeesByCurrency: Record<string, number>;
   estimatedProfitByCurrency: Record<string, number>;
   todaysAppointmentsCount: number;
   upcomingAppointments: Appointment[];

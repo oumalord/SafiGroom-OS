@@ -38,7 +38,7 @@ function StaffPortal() {
 
   const cards = [
     { label: 'Waiting now', value: String(dashboard.waitingNow), sub: 'Clients assigned to you', icon: Clock3, tone: 'warning' as const },
-    { label: "Today's earnings", value: fmtKES(dashboard.dailyEarningsKES), sub: 'Commission from completed services', icon: TrendingUp, tone: 'success' as const },
+    { label: "Today's earnings", value: fmtKES(dashboard.dailyEarningsKES), sub: `Commission ${fmtKES(dashboard.dailyCommissionKES)} + assistant fees ${fmtKES(dashboard.dailyAssistantFeesKES)}`, icon: TrendingUp, tone: 'success' as const },
     { label: 'Clients served today', value: String(dashboard.clientsServedToday), sub: 'Unique clients with completed sales', icon: UserRound, tone: 'neutral' as const },
     { label: 'This week', value: fmtKES(dashboard.weeklyEarningsKES), sub: 'Commission since Monday', icon: CalendarCheck2, tone: 'neutral' as const },
   ];
@@ -65,19 +65,19 @@ function StaffPortal() {
           <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-[#34C759]/10 text-[#1c7c34]"><TrendingUp size={19} aria-hidden="true" /></div>
           <div>
             <h2 className="font-semibold">Your earnings at a glance</h2>
-            <p className="mt-1 text-sm text-[#6E6E73]">Earnings use your commission rate and completed service sales only. Reception and salary compensation are not included here.</p>
+            <p className="mt-1 text-sm text-[#6E6E73]">Primary staff earn commission on the service fee after assistant fees. Assistants see the fees assigned to them here.</p>
           </div>
         </div>
         <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div className="rounded-2xl bg-[#F5F7FA] p-4 sm:p-5">
             <p className="text-xs font-medium text-[#6E6E73]">Today</p>
             <p className="mt-1 text-2xl font-semibold tracking-tight">{fmtKES(dashboard.dailyEarningsKES)}</p>
-            <p className="mt-1 text-xs text-[#6E6E73]">{dashboard.clientsServedToday} client{dashboard.clientsServedToday === 1 ? '' : 's'} served</p>
+            <p className="mt-1 text-xs text-[#6E6E73]">Commission {fmtKES(dashboard.dailyCommissionKES)} + assistant fees {fmtKES(dashboard.dailyAssistantFeesKES)} · {dashboard.clientsServedToday} client{dashboard.clientsServedToday === 1 ? '' : 's'} served</p>
           </div>
           <div className="rounded-2xl bg-[#F5F7FA] p-4 sm:p-5">
             <p className="text-xs font-medium text-[#6E6E73]">Week starting {new Date(dashboard.weekStartsAt).toLocaleDateString([], { day: 'numeric', month: 'short' })}</p>
             <p className="mt-1 text-2xl font-semibold tracking-tight">{fmtKES(dashboard.weeklyEarningsKES)}</p>
-            <p className="mt-1 text-xs text-[#6E6E73]">Completed service commission</p>
+            <p className="mt-1 text-xs text-[#6E6E73]">Commission {fmtKES(dashboard.weeklyCommissionKES)} + assistant fees {fmtKES(dashboard.weeklyAssistantFeesKES)}</p>
           </div>
         </div>
         <p className="mt-4 text-[11px] text-[#8b8f98]">Dashboard refreshes automatically every minute.</p>

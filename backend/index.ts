@@ -529,28 +529,42 @@ export const handler = router({
     const now = new Date();
     const todayStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
     const weekStart = todayStart - ((now.getUTCDay() + 6) % 7) * DAY;
-    let dailyEarningsKES = 0;
-    let weeklyEarningsKES = 0;
+    let dailyCommissionKES = 0;
+    let dailyAssistantFeesKES = 0;
+    let weeklyCommissionKES = 0;
+    let weeklyAssistantFeesKES = 0;
     const clientsToday = new Set<string>();
     for (const order of orders as any[]) {
       const createdAt = Number(order.createdAt || 0);
       if (createdAt < weekStart || createdAt >= now.getTime()) continue;
       let thisOrderCommissionToday = 0;
+      let thisOrderAssistantFeeToday = 0;
       for (const item of order.items || []) {
-        if (item.type !== 'service' || item.staffId !== member.id || item.currency === 'USD') continue;
-        const revenue = Number(item.lineTotalAfterDiscount ?? Number(item.price || 0) * Number(item.qty || 1)) || 0;
-        const pct = Number(member.commissionPct ?? 40);
-        const commission = revenue * pct / 100;
-        weeklyEarningsKES += commission;
-        if (createdAt >= todayStart) thisOrderCommissionToday += commission;
+        if (item.type !== 'service' || item.currency === 'USD') continue;
+        const lineTotal = Number(item.lineTotalAfterDiscount ?? Number(item.price || 0) * Number(item.qty || 1)) || 0;
+        const commissionableAmount = Math.max(0, Number(item.commissionableAmount ?? lineTotal));
+        const assistantFee = Math.max(0, Number(item.assistantFeeAfterDiscount || 0));
+        const isPrimary = item.staffId === member.id;
+        const isAssistant = item.assistantId === member.id;
+        const commission = isPrimary ? commissionableAmount * Number(member.commissionPct ?? 40) / 100 : 0;
+        const assistantEarning = isAssistant ? assistantFee : 0;
+        weeklyCommissionKES += commission;
+        weeklyAssistantFeesKES += assistantEarning;
+        if (createdAt >= todayStart) {
+          thisOrderCommissionToday += commission;
+          thisOrderAssistantFeeToday += assistantEarning;
+          if (isPrimary || isAssistant) clientsToday.add(String(order.customerId || order.customerName || order.id));
+        }
       }
-      if (createdAt >= todayStart && thisOrderCommissionToday > 0) {
-        dailyEarningsKES += thisOrderCommissionToday;
-        clientsToday.add(String(order.customerId || order.customerName || order.id));
+      if (createdAt >= todayStart) {
+        dailyCommissionKES += thisOrderCommissionToday;
+        dailyAssistantFeesKES += thisOrderAssistantFeeToday;
       }
     }
+    const dailyEarningsKES = dailyCommissionKES + dailyAssistantFeesKES;
+    const weeklyEarningsKES = weeklyCommissionKES + weeklyAssistantFeesKES;
     const waitingNow = (queue as any[]).filter(item => item.staffId === member.id && item.status === 'waiting').length;
-    return json({ staff: { id: member.id, name: member.name, role: member.role, chair: member.chair || '', branchName: member.branchName || member.branch || '' }, waitingNow, dailyEarningsKES: Math.round(dailyEarningsKES), weeklyEarningsKES: Math.round(weeklyEarningsKES), clientsServedToday: clientsToday.size, weekStartsAt: weekStart });
+    return json({ staff: { id: member.id, name: member.name, role: member.role, chair: member.chair || '', branchName: member.branchName || member.branch || '' }, waitingNow, dailyEarningsKES: Math.round(dailyEarningsKES), weeklyEarningsKES: Math.round(weeklyEarningsKES), dailyCommissionKES: Math.round(dailyCommissionKES), dailyAssistantFeesKES: Math.round(dailyAssistantFeesKES), weeklyCommissionKES: Math.round(weeklyCommissionKES), weeklyAssistantFeesKES: Math.round(weeklyAssistantFeesKES), clientsServedToday: clientsToday.size, weekStartsAt: weekStart });
   }],
   'POST /api/staff': [async ({ body }) => {
     if (!['owner', 'manager'].includes(currentContext()?.role || '')) return error('Only the owner or manager can add staff', 403);
@@ -874,14 +888,45 @@ export const handler = router({
     }
     const discountPct = effectiveDiscountPct;
     const paymentMethod = b.paymentMethod === 'Card' || b.paymentMethod === 'M-Pesa' ? b.paymentMethod : 'Cash';
-    const orderItems = items.map((it: any) => ({
-      ...it,
-      type: it.type || 'service',
-      qty: Number(it.qty || 1),
-      price: Number(it.price || 0),
-      currency: it.currency || 'KES',
-      lineTotalAfterDiscount: Math.round((Number(it.price || 0) * Number(it.qty || 0)) * (1 - discountPct / 100)),
-    }));
+    const rawStaffIds = Array.from(new Set((items as any[]).flatMap(item => [item.staffId, item.assistantId]).filter(Boolean).map(String)));
+    const staffRecords = rawStaffIds.length ? await db.get('staff', rawStaffIds) : [];
+    const staffById = new Map((staffRecords as any[]).filter(Boolean).map(member => [member.id, member]));
+    const orderItems: any[] = [];
+    for (const it of items as any[]) {
+      const type = it.type || 'service';
+      const qty = Number(it.qty || 1);
+      const price = Number(it.price || 0);
+      const lineTotalAfterDiscount = Math.round(price * qty * (1 - discountPct / 100));
+      let assistantFeeAfterDiscount = 0;
+      let commissionableAmount = lineTotalAfterDiscount;
+      let assistant: any = null;
+      if (type === 'service' && it.assistantId) {
+        assistant = staffById.get(String(it.assistantId));
+        if (!assistant || assistant.tenantId !== currentContext()?.tenantId || assistant.employmentStatus === 'laid-off') return error('Selected assistant is not an active staff member in this salon.', 400);
+        if (String(it.assistantId) === String(it.staffId)) return error('The primary staff member and assistant must be different people.', 400);
+        const grossAssistantFee = Number(it.assistantFee);
+        if (!Number.isFinite(grossAssistantFee) || grossAssistantFee <= 0 || grossAssistantFee > price) return error('Enter an assistant fee greater than zero and no more than the service price.', 400);
+        assistantFeeAfterDiscount = Math.round(grossAssistantFee * qty);
+        if (assistantFeeAfterDiscount > lineTotalAfterDiscount) return error('The assistant fee cannot exceed the discounted service amount.', 400);
+        commissionableAmount = Math.max(0, lineTotalAfterDiscount - assistantFeeAfterDiscount);
+      }
+      if (type === 'service' && it.staffId) {
+        const primary = staffById.get(String(it.staffId));
+        if (!primary || primary.tenantId !== currentContext()?.tenantId || primary.employmentStatus === 'laid-off') return error('Selected primary staff member is not active in this salon.', 400);
+      }
+      orderItems.push({
+        ...it,
+        type,
+        qty,
+        price,
+        currency: it.currency || 'KES',
+        lineTotalAfterDiscount,
+        assistantId: assistant?.id || null,
+        assistantName: assistant?.name || null,
+        assistantFeeAfterDiscount,
+        commissionableAmount,
+      });
+    }
 
     const subtotalByCurrency: Record<string, number> = {};
     for (const it of orderItems) {
@@ -995,12 +1040,25 @@ export const handler = router({
     for (const order of orders as any[]) {
       if (!order.createdAt || order.createdAt < from || order.createdAt >= now) continue;
       (order.items || []).forEach((item: any, index: number) => {
-        if (item.type !== 'service' || !item.staffId || alreadyPaid.has(`${order.id}:${index}`)) return;
-        const member = staffById.get(item.staffId);
-        if (!member || member.compensationType === 'salary' || String(member.role || '').toLowerCase().includes('reception')) return;
-        const revenue = Number(item.lineTotalAfterDiscount ?? item.price * item.qty) || 0;
-        const commissionPct = Number(member.commissionPct ?? 40);
-        lines.push({ itemKey: `${order.id}:${index}`, orderId: order.id, staffId: item.staffId, staffName: item.staffName || member.name, revenue, commission: revenue * commissionPct / 100, commissionPct, currency: item.currency || 'KES', branchId: order.branchId || context.branchId || null, createdAt: now });
+        if (item.type !== 'service') return;
+        const currency = item.currency || 'KES';
+        const branchId = order.branchId || context.branchId || null;
+        const primaryKey = `${order.id}:${index}`;
+        if (item.staffId && !alreadyPaid.has(primaryKey)) {
+          const member: any = staffById.get(item.staffId);
+          if (member && member.compensationType !== 'salary' && !String(member.role || '').toLowerCase().includes('reception')) {
+            const revenue = Math.max(0, Number(item.commissionableAmount ?? item.lineTotalAfterDiscount ?? Number(item.price || 0) * Number(item.qty || 1)) || 0);
+            const commissionPct = Number(member.commissionPct ?? 40);
+            const commission = revenue * commissionPct / 100;
+            if (commission > 0) lines.push({ itemKey: primaryKey, orderId: order.id, staffId: item.staffId, staffName: item.staffName || member.name, revenue, commission, commissionPct, payoutType: 'commission', currency, branchId, createdAt: now });
+          }
+        }
+        const assistantKey = `${order.id}:${index}:assistant`;
+        const assistantFee = Math.max(0, Number(item.assistantFeeAfterDiscount || 0));
+        if (item.assistantId && assistantFee > 0 && !alreadyPaid.has(assistantKey)) {
+          const assistant: any = staffById.get(item.assistantId);
+          if (assistant) lines.push({ itemKey: assistantKey, orderId: order.id, staffId: assistant.id, staffName: item.assistantName || assistant.name, revenue: assistantFee, commission: assistantFee, assistantFee, payoutType: 'assistant_fee', currency, branchId, createdAt: now });
+        }
       });
     }
     if (!lines.length) return error('There are no unpaid commissions in this period.', 409);
@@ -1008,7 +1066,7 @@ export const handler = router({
     const [batchId] = await db.add('payout_batches', [{ range, from, to: now, totalKES, employeeCount: new Set(lines.map(line => line.staffId)).size, itemCount: lines.length, status: 'recorded', createdAt: now }]);
     await db.add('payout_items', lines.map(line => ({ ...line, batchId })));
     await audit('recorded', 'payout_batch', { id: batchId, range, totalKES, employeeCount: new Set(lines.map(line => line.staffId)).size, itemCount: lines.length }, 'owner');
-    return json({ id: batchId, range, totalKES, employeeCount: new Set(lines.map(line => line.staffId)).size, itemCount: lines.length, status: 'recorded', message: 'Payout recorded internally. No money was sent.' });
+    return json({ id: batchId, range, totalKES, employeeCount: new Set(lines.map(line => line.staffId)).size, itemCount: lines.length, status: 'recorded', message: 'Commission and assistant-fee payouts recorded internally. No money was sent.' });
   }],
   'POST /api/payroll/send': [async ({ body }) => {
     const context = currentContext();
@@ -1099,6 +1157,7 @@ export const handler = router({
 
     let productCost = 0;
     const commissionsByCurrency: Record<string, number> = {};
+    const assistantFeesByCurrency: Record<string, number> = {};
     const staffRevenue = new Map<string, { name: string; currency: string; revenue: number; commission: number; count: number }>();
     const serviceRevenue = new Map<string, { name: string; currency: string; revenue: number; count: number }>();
     for (const o of rangeOrders) {
@@ -1111,12 +1170,15 @@ export const handler = router({
           const staff: any = it.staffId ? staffById.get(it.staffId) : null;
           const pct = staff && staff.compensationType !== 'salary' && !String(staff.role || '').toLowerCase().includes('reception') ? Number(staff.commissionPct ?? 40) : 0;
           const serviceRevenueAfterDiscount = it.lineTotalAfterDiscount ?? it.price * it.qty;
-          const comm = serviceRevenueAfterDiscount * (pct / 100);
+          const commissionableAmount = Math.max(0, Number(it.commissionableAmount ?? serviceRevenueAfterDiscount));
+          const assistantFee = Math.max(0, Number(it.assistantFeeAfterDiscount || 0));
+          assistantFeesByCurrency[cur] = (assistantFeesByCurrency[cur] || 0) + assistantFee;
+          const comm = commissionableAmount * (pct / 100);
           commissionsByCurrency[cur] = (commissionsByCurrency[cur] || 0) + comm;
           if (it.staffId) {
             const key = `${it.staffId}|${cur}`;
             const entry = staffRevenue.get(key) || { name: it.staffName || 'Unknown', currency: cur, revenue: 0, commission: 0, count: 0 };
-            entry.revenue += serviceRevenueAfterDiscount; entry.commission += comm; entry.count += it.qty;
+            entry.revenue += commissionableAmount; entry.commission += comm; entry.count += it.qty;
             staffRevenue.set(key, entry);
           }
           const skey = `${it.name}|${cur}`;
@@ -1130,9 +1192,9 @@ export const handler = router({
     const rangeExpenses = (expensesAll as any[]).filter(e => new Date(e.date).getTime() >= cutoff);
     const expenseTotal = rangeExpenses.reduce((s: number, e: any) => s + e.amount, 0);
     const estimatedProfitByCurrency: Record<string, number> = {};
-    estimatedProfitByCurrency.KES = (revenueByCurrency.KES || 0) - productCost - (commissionsByCurrency.KES || 0) - expenseTotal;
+    estimatedProfitByCurrency.KES = (revenueByCurrency.KES || 0) - productCost - (commissionsByCurrency.KES || 0) - (assistantFeesByCurrency.KES || 0) - expenseTotal;
     if (revenueByCurrency.USD || commissionsByCurrency.USD) {
-      estimatedProfitByCurrency.USD = (revenueByCurrency.USD || 0) - (commissionsByCurrency.USD || 0);
+      estimatedProfitByCurrency.USD = (revenueByCurrency.USD || 0) - (commissionsByCurrency.USD || 0) - (assistantFeesByCurrency.USD || 0);
     }
 
     const todayStr = new Date().toISOString().slice(0, 10);
@@ -1151,7 +1213,7 @@ export const handler = router({
 
     return json({
       range, revenueByCurrency, ordersCount: rangeOrders.length, paymentMethodTotals,
-      expenseTotal, productCost, commissionsByCurrency, estimatedProfitByCurrency,
+      expenseTotal, productCost, commissionsByCurrency, assistantFeesByCurrency, estimatedProfitByCurrency,
       todaysAppointmentsCount: todaysAppointments.length,
       upcomingAppointments: todaysAppointments.filter((a: any) => ['pending', 'confirmed', 'checked-in'].includes(a.status)).slice(0, 8),
       lowStockProducts: lowStock,

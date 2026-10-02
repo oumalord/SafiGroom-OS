@@ -28,6 +28,7 @@ function OwnerReport({ range }: { range: Range }) {
 
   const revenueKES = data.revenueByCurrency.KES || 0;
   const commissionsKES = data.commissionsByCurrency.KES || 0;
+  const assistantFeesKES = data.assistantFeesByCurrency.KES || 0;
   const profitKES = data.estimatedProfitByCurrency.KES || 0;
 
   const commissionStatement = staff.filter(s => s.compensationType !== 'salary').map(s => {
@@ -48,6 +49,7 @@ function OwnerReport({ range }: { range: Range }) {
       ['M-Pesa payments (KES)', data.paymentMethodTotals['M-Pesa']],
       ['Product Cost (KES)', data.productCost],
       ['Commissions (KES)', commissionsKES],
+      ['Assistant Fees (KES)', assistantFeesKES],
       ['Expenses (KES)', data.expenseTotal],
       ['Net Profit after commission and expenses (KES)', profitKES],
       [],
@@ -87,7 +89,7 @@ function OwnerReport({ range }: { range: Range }) {
             ))}
           </tbody>
         </table>
-        <p className="text-xs text-[#6E6E73] mt-3">Commission-paid service staff earn their configured rate (40% by default). Monthly-salary reception staff are excluded from commissions.</p>
+        <p className="text-xs text-[#6E6E73] mt-3">Commission-paid service staff earn their configured rate (40% by default) on service revenue after assistant fees. Monthly-salary reception staff are excluded from commissions.</p>
       </Card>
     </div>
   );
