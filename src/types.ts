@@ -149,6 +149,7 @@ export interface OrderItem {
 
 export interface Order {
   id: string;
+  appointmentId?: string | null;
   customerId: string | null;
   customerName: string;
   items: OrderItem[];

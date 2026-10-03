@@ -74,6 +74,7 @@ function App() {
   const [tab, setTab] = useState<TabKey>(() => initialTabFor(AuthApi.account()));
   const [menuOpen, setMenuOpen] = useState(false);
   const [account, setAccount] = useState<any | null>(() => AuthApi.account());
+  const [appointmentForCheckout, setAppointmentForCheckout] = useState<any | null>(null);
   const [branches, setBranches] = useState<Branch[]>([]);
   const [unreadMessages, setUnreadMessages] = useState(0);
   const [selectedBranchId, setSelectedBranchId] = useState(() => window.localStorage.getItem('safigroom_selected_branch') || '');
@@ -245,7 +246,7 @@ function App() {
                 {tab === 'dashboard' && effectiveRole === 'owner' && <Dashboard />}
                 {tab === 'dashboard' && effectiveRole === 'barber' && <StaffPortal />}
                 {tab === 'dashboard' && effectiveRole === 'customer' && <CustomerDashboard onBook={() => setTab('booking')} />}
-                {tab === 'appointments' && <Appointments role={effectiveRole} />}
+                {tab === 'appointments' && <Appointments role={effectiveRole} onChargeAppointment={appointment => { setAppointmentForCheckout(appointment); setTab('pos'); }} />}
                 {tab === 'queue' && <Queue />}
                 {tab === 'messages' && <Messages role={effectiveRole} accountId={account.id} />}
                 {tab === 'staff' && <StaffTab role={effectiveRole} />}
@@ -253,7 +254,7 @@ function App() {
                 {tab === 'memberships' && <Memberships />}
                 {tab === 'promotions' && <Promotions role={effectiveRole} />}
                 {tab === 'customers' && <CustomersTab />}
-                {tab === 'pos' && <POS onSaleComplete={() => toast('Sale completed and recorded.', 'success')} />}
+                {tab === 'pos' && <POS appointment={appointmentForCheckout} onSaleComplete={completedAppointmentId => { toast(completedAppointmentId ? 'Appointment charged and completed. Staff commissions were recorded.' : 'Sale completed and recorded.', 'success'); if (completedAppointmentId) setAppointmentForCheckout(null); }} />}
                 {tab === 'inventory' && <Inventory />}
                 {tab === 'finance' && <Finance />}
                 {tab === 'reports' && <Reports role={effectiveRole} />}

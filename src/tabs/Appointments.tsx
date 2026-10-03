@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Plus, Calendar, Clock, Pencil } from 'lucide-react';
+import { Plus, Calendar, Clock, Pencil, ShoppingCart } from 'lucide-react';
 import { Card, Button, Badge, Modal, Field, Input, Select, EmptyState, LoadingState, toast } from '../components/ui';
 import { AppointmentsApi, StaffApi, ServicesApi, CustomersApi, fmtKES } from '../lib/api';
 import type { Appointment, Staff, ServiceItem, Customer, AppointmentStatus, Role } from '../types';
@@ -7,14 +7,14 @@ import type { Appointment, Staff, ServiceItem, Customer, AppointmentStatus, Role
 function todayStr() { return new Date().toISOString().slice(0, 10); }
 
 const STATUS_FLOW: Record<AppointmentStatus, AppointmentStatus | null> = {
-  pending: 'confirmed', confirmed: 'checked-in', 'checked-in': 'in-service', 'in-service': 'completed', completed: null, cancelled: null, 'no-show': null,
+  pending: 'confirmed', confirmed: 'checked-in', 'checked-in': 'in-service', 'in-service': null, completed: null, cancelled: null, 'no-show': null,
 };
 
 const STATUS_TONE: Record<AppointmentStatus, 'neutral' | 'success' | 'warning' | 'danger' | 'info'> = {
   pending: 'neutral', confirmed: 'info', 'checked-in': 'warning', 'in-service': 'warning', completed: 'success', cancelled: 'danger', 'no-show': 'danger',
 };
 
-function Appointments({ role }: { role: Role }) {
+function Appointments({ role, onChargeAppointment }: { role: Role; onChargeAppointment: (appointment: Appointment) => void }) {
   const [date, setDate] = useState(todayStr());
   const [appts, setAppts] = useState<Appointment[]>([]);
   const [staff, setStaff] = useState<Staff[]>([]);
@@ -188,6 +188,8 @@ function Appointments({ role }: { role: Role }) {
                       {staff.filter(s => s.status === 'available' || s.id === a.staffId).map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
                     </Select>
                   )}
+                {a.status === 'in-service' && ['owner', 'manager', 'receptionist'].includes(role) && <Button size="sm" onClick={() => onChargeAppointment(a)}><ShoppingCart size={14} aria-hidden="true" />Charge in POS</Button>}
+                {a.status === 'in-service' && role === 'barber' && <span className="self-center text-xs text-[#6E6E73]">Awaiting POS checkout</span>}
                 {STATUS_FLOW[a.status] && <Button size="sm" variant="secondary" onClick={() => advance(a)}>Mark {STATUS_FLOW[a.status]?.replace('-', ' ')}</Button>}
                 {!['completed', 'cancelled', 'no-show'].includes(a.status) && <Button size="sm" variant="ghost" onClick={() => setStatus(a, 'no-show')}>No-show</Button>}
                 {!['completed', 'cancelled'].includes(a.status) && <Button size="sm" variant="danger" onClick={() => setStatus(a, 'cancelled')}>Cancel</Button>}

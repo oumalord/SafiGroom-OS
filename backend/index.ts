@@ -809,6 +809,7 @@ export const handler = router({
     const [existing] = await db.get('appointments', [params.id]);
     if (!existing) return error('Appointment not found', 404);
     const patch: any = body;
+    if (patch.status === 'completed') return error('Appointments can only be completed by charging the service through POS.', 409);
     const editsDetails = patch.date || patch.time || patch.serviceId || patch.durationMin || 'staffId' in patch;
     if (editsDetails && !['owner', 'receptionist'].includes(currentContext()?.role || '')) return error('Only the owner or receptionist can edit appointment details', 403);
     if (['completed', 'cancelled', 'no-show'].includes(existing.status) && (patch.date || patch.time || patch.serviceId || 'staffId' in patch)) return error('Completed or closed appointments cannot be edited', 409);
@@ -913,6 +914,46 @@ export const handler = router({
     const items = b.items;
     if (!items || !Array.isArray(items) || items.length === 0) return error('Cart is empty', 400);
 
+    const context = currentContext();
+    let linkedAppointment: any = null;
+    const appointmentServiceMatches = new Map<number, any>();
+    if (b.appointmentId) {
+      if (!['owner', 'manager', 'receptionist'].includes(context?.role || '')) return error('Only reception or management can charge an appointment through POS.', 403);
+      [linkedAppointment] = await db.get('appointments', [String(b.appointmentId)]);
+      if (!linkedAppointment) return error('Appointment not found.', 404);
+      if (linkedAppointment.status !== 'in-service') return error('Only an in-service appointment can be charged. Move it to in-service first.', 409);
+      if (linkedAppointment.customerId && b.customerId && linkedAppointment.customerId !== b.customerId) return error('The POS customer must match the appointment customer.', 409);
+      const { items: priorOrders } = await db.listAllTenant('orders', context!.tenantId, { limit: 5000 });
+      if ((priorOrders as any[]).some(order => order.appointmentId === linkedAppointment.id)) return error('This appointment has already been charged.', 409);
+
+      const expectedServices = Array.isArray(linkedAppointment.items) && linkedAppointment.items.length
+        ? linkedAppointment.items
+        : linkedAppointment.serviceId ? [{ serviceId: linkedAppointment.serviceId, serviceName: linkedAppointment.serviceName, price: linkedAppointment.price, currency: linkedAppointment.currency, staffId: linkedAppointment.staffId, staffName: linkedAppointment.staffName }] : [];
+      const matchedIndexes = new Set<number>();
+      for (const expected of expectedServices) {
+        const index = (items as any[]).findIndex((item, candidate) => !matchedIndexes.has(candidate) && (item.type || 'service') === 'service' && (expected.serviceId ? String(item.refId) === String(expected.serviceId) : true));
+        if (index < 0) return error(`Add the booked service${expected.serviceName ? ` (${expected.serviceName})` : ''} to the POS cart before completing the appointment.`, 400);
+        const line = (items as any[])[index];
+        const assignedStaffId = expected.staffId || linkedAppointment.staffId;
+        if (assignedStaffId && String(line.staffId || '') !== String(assignedStaffId)) return error('The booked service must remain assigned to its appointment employee.', 409);
+        if (!line.staffId) return error('Assign an active employee to every appointment service before charging.', 400);
+        if (Number(line.qty || 1) !== 1) return error('An appointment service can only be charged once.', 400);
+        matchedIndexes.add(index);
+        appointmentServiceMatches.set(index, expected);
+      }
+      if (!expectedServices.length) {
+        const index = (items as any[]).findIndex(item => (item.type || 'service') === 'service');
+        if (index < 0) return error('Choose the actual service delivered and add it to POS before completing this appointment.', 400);
+        const line = (items as any[])[index];
+        if (linkedAppointment.staffId && String(line.staffId || '') !== String(linkedAppointment.staffId)) return error('The service must remain assigned to its appointment employee.', 409);
+        if (!line.staffId) return error('Assign an active employee to the service before charging.', 400);
+        if (Number(line.qty || 1) !== 1) return error('An appointment service can only be charged once.', 400);
+        matchedIndexes.add(index);
+        appointmentServiceMatches.set(index, null);
+      }
+    }
+    const checkoutCustomerId = linkedAppointment?.customerId || b.customerId || null;
+
     let effectiveDiscountPct = b.discountPct || 0;
     let discountSource = effectiveDiscountPct > 0 ? 'manual' : 'none';
     let promoUsed: any = null;
@@ -925,8 +966,8 @@ export const handler = router({
       if (match.discountPct > effectiveDiscountPct) { effectiveDiscountPct = match.discountPct; discountSource = 'promo'; }
       promoUsed = match;
     }
-    if (b.customerId) {
-      const [custForMembership] = await db.get('customers', [b.customerId]);
+    if (checkoutCustomerId) {
+      const [custForMembership] = await db.get('customers', [checkoutCustomerId]);
       if (custForMembership && custForMembership.membershipTier && custForMembership.membershipTier !== 'none' && (!custForMembership.membershipExpiry || custForMembership.membershipExpiry >= Date.now())) {
         const { items: plans } = await db.list('membership_plans', { limit: 50 });
         const plan = (plans as any[]).find(p => p.name === custForMembership.membershipTier);
@@ -939,10 +980,30 @@ export const handler = router({
     const staffRecords = rawStaffIds.length ? await db.get('staff', rawStaffIds) : [];
     const staffById = new Map((staffRecords as any[]).filter(Boolean).map(member => [member.id, member]));
     const orderItems: any[] = [];
-    for (const it of items as any[]) {
+    for (const [itemIndex, it] of (items as any[]).entries()) {
       const type = it.type || 'service';
       const qty = Number(it.qty || 1);
-      const price = Number(it.price || 0);
+      const appointmentService = appointmentServiceMatches.get(itemIndex);
+      let price = Number(it.price || 0);
+      let serviceName = it.name;
+      let currency = it.currency || 'KES';
+      let durationMin = Number(it.durationMin || 0);
+      if (linkedAppointment && type === 'service' && appointmentServiceMatches.has(itemIndex)) {
+        if (appointmentService?.serviceId) {
+          price = Number(appointmentService.price ?? linkedAppointment.price ?? price);
+          serviceName = appointmentService.serviceName || linkedAppointment.serviceName || it.name;
+          currency = appointmentService.currency || linkedAppointment.currency || currency;
+          durationMin = Number(appointmentService.durationMin || linkedAppointment.durationMin || durationMin || 30);
+        } else {
+          const [catalogService] = await db.get('services', [String(it.refId || '')]);
+          if (!catalogService) return error('Select a valid catalog service for this appointment.', 404);
+          price = Number(catalogService.price);
+          serviceName = catalogService.name;
+          currency = catalogService.currency || 'KES';
+          durationMin = Number(catalogService.durationMin || durationMin || 30);
+        }
+        if (!Number.isFinite(price) || price <= 0) return error('Appointment services must have a positive charge.', 400);
+      }
       const lineTotalAfterDiscount = Math.round(price * qty * (1 - discountPct / 100));
       let assistantFeeAfterDiscount = 0;
       let commissionableAmount = lineTotalAfterDiscount;
@@ -966,7 +1027,9 @@ export const handler = router({
         type,
         qty,
         price,
-        currency: it.currency || 'KES',
+        name: serviceName,
+        currency,
+        durationMin: durationMin || undefined,
         lineTotalAfterDiscount,
         assistantId: assistant?.id || null,
         assistantName: assistant?.name || null,
@@ -988,9 +1051,15 @@ export const handler = router({
       totalByCurrency[cur] = subtotalByCurrency[cur] - d;
     }
 
+    if (linkedAppointment) {
+      const chargedAppointmentLines = Array.from(appointmentServiceMatches.keys()).map(index => orderItems[index]);
+      if (chargedAppointmentLines.some(item => item.lineTotalAfterDiscount <= 0)) return error('An appointment service must be charged a positive amount after discounts.', 400);
+      if (paymentMethod === 'M-Pesa' && (totalByCurrency.KES || 0) > 0 && !b.mpesaReceiptNumber) return error('Complete the M-Pesa payment before finalizing this appointment.', 402);
+    }
+
     let pointsRedeemed = 0;
-    if (b.redeemPoints && b.customerId) {
-      const [custForPoints] = await db.get('customers', [b.customerId]);
+    if (b.redeemPoints && checkoutCustomerId) {
+      const [custForPoints] = await db.get('customers', [checkoutCustomerId]);
       if (custForPoints) {
         const available = (custForPoints.loyaltyPoints as number) || 0;
         pointsRedeemed = Math.max(0, Math.min(Number(b.redeemPoints) || 0, available, totalByCurrency.KES || 0));
@@ -1016,28 +1085,51 @@ export const handler = router({
       await db.add('stock_movements', productItems.map((item: any) => ({ productId: item.refId, productName: item.name, change: -Number(item.qty || 0), reason: 'POS sale', orderCustomerName: b.customerName || 'Walk-in Customer', createdAt: Date.now(), actor: b.actor || 'receptionist' })));
     }
 
-    let customerName = b.customerName || 'Walk-in Customer';
-    if (b.customerId) {
-      const [cust] = await db.get('customers', [b.customerId]);
+    let customerName = linkedAppointment?.customerName || b.customerName || 'Walk-in Customer';
+    if (checkoutCustomerId) {
+      const [cust] = await db.get('customers', [checkoutCustomerId]);
       if (cust) {
         customerName = cust.name as string;
         const kesTotal = totalByCurrency.KES || 0;
         const usdTotal = totalByCurrency.USD || 0;
         const points = Math.floor(kesTotal / 100);
-        await db.update('customers', [{ id: b.customerId, record: { ...cust, totalSpent: (cust.totalSpent as number || 0) + kesTotal, totalSpentUSD: (cust.totalSpentUSD as number || 0) + usdTotal, visits: (cust.visits as number || 0) + 1, loyaltyPoints: (cust.loyaltyPoints as number || 0) + points - pointsRedeemed, lastVisit: Date.now() } }]);
+        await db.update('customers', [{ id: checkoutCustomerId, record: { ...cust, totalSpent: (cust.totalSpent as number || 0) + kesTotal, totalSpentUSD: (cust.totalSpentUSD as number || 0) + usdTotal, visits: (cust.visits as number || 0) + 1, loyaltyPoints: (cust.loyaltyPoints as number || 0) + points - pointsRedeemed, lastVisit: Date.now() } }]);
       }
     }
 
-    const [orderId] = await db.add('orders', [{ customerId: b.customerId || null, customerName, items: orderItems, discountPct, discountSource, promoCode: promoUsed ? promoUsed.code : null, pointsRedeemed, mpesaReceiptNumber: b.mpesaReceiptNumber || null, subtotalByCurrency, discountByCurrency, totalByCurrency, paymentMethod, createdAt: Date.now() }]);
+    const orderCreatedAt = Date.now();
+    const [orderId] = await db.add('orders', [{ customerId: checkoutCustomerId, customerName, appointmentId: linkedAppointment?.id || null, items: orderItems, discountPct, discountSource, promoCode: promoUsed ? promoUsed.code : null, pointsRedeemed, mpesaReceiptNumber: b.mpesaReceiptNumber || null, subtotalByCurrency, discountByCurrency, totalByCurrency, paymentMethod, createdAt: orderCreatedAt }]);
     if (!orderId) return error('Failed to create order', 500);
     await audit('created', 'order', { id: orderId, customerName, items: orderItems.map((item: any) => ({ ...item, productName: item.type === 'product' ? item.name : undefined, serviceName: item.type === 'service' ? item.name : undefined })), totalByCurrency, paymentMethod }, b.actor || 'receptionist');
 
-    if (b.appointmentId) {
-      const [appt] = await db.get('appointments', [b.appointmentId]);
-      if (appt) await db.update('appointments', [{ id: b.appointmentId, record: { ...appt, status: 'completed' } }]);
+    if (linkedAppointment) {
+      const chargedServices = Array.from(appointmentServiceMatches.keys()).map(index => orderItems[index]);
+      const staffIds = Array.from(new Set(chargedServices.map(item => item.staffId).filter(Boolean)));
+      const billedServiceName = chargedServices.map(item => item.name).join(', ');
+      const billedPrice = chargedServices.reduce((sum, item) => sum + Number(item.lineTotalAfterDiscount || 0), 0);
+      const staffRecordsForAppointment = staffIds.length ? await db.get('staff', staffIds.map(String)) : [];
+      const appointmentStaff = staffRecordsForAppointment.filter(Boolean);
+      await db.update('appointments', [{ id: linkedAppointment.id, record: {
+        ...linkedAppointment,
+        status: 'completed',
+        orderId,
+        completedAt: orderCreatedAt,
+        serviceId: chargedServices[0]?.refId || linkedAppointment.serviceId || null,
+        serviceName: billedServiceName || linkedAppointment.serviceName,
+        price: billedPrice,
+        currency: chargedServices[0]?.currency || linkedAppointment.currency || 'KES',
+        durationMin: chargedServices.reduce((sum, item) => sum + Number(item.durationMin || 30), 0),
+        staffId: appointmentStaff[0]?.id || chargedServices[0]?.staffId || linkedAppointment.staffId || null,
+        staffName: appointmentStaff.map(member => member.name).join(', ') || linkedAppointment.staffName || null,
+        items: chargedServices.map(item => ({ serviceId: item.refId, serviceName: item.name, price: item.price, currency: item.currency, durationMin: item.durationMin || 30, staffId: item.staffId || null, staffName: item.staffName || null })),
+      } }]);
+      const { items: queueEntries } = await db.listAllTenant('queue', context!.tenantId, { limit: 3000 });
+      const queueEntry = (queueEntries as any[]).find(entry => entry.appointmentId === linkedAppointment.id);
+      if (queueEntry) await db.update('queue', [{ id: queueEntry.id, record: { ...queueEntry, status: 'completed', serviceName: billedServiceName, staffId: chargedServices[0]?.staffId || queueEntry.staffId, staffName: chargedServices.map(item => item.staffName).filter(Boolean).join(', ') || queueEntry.staffName, servedAt: orderCreatedAt } }]);
+      await audit('status:completed', 'appointment', { ...linkedAppointment, status: 'completed', orderId, serviceName: billedServiceName, price: billedPrice }, context?.name || 'receptionist');
     }
 
-    return json({ id: orderId, subtotalByCurrency, discountByCurrency, totalByCurrency, discountSource, pointsRedeemed });
+    return json({ id: orderId, appointmentId: linkedAppointment?.id || null, subtotalByCurrency, discountByCurrency, totalByCurrency, discountSource, pointsRedeemed });
   }],
 
   'GET /api/expenses': [async () => {

@@ -1,13 +1,13 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ShoppingCart } from 'lucide-react';
 import { Card, Button, Modal, Field, Input, Select, toast } from '../components/ui';
 import { CustomersApi, ServicesApi, ProductsApi, StaffApi, OrdersApi, fmtMoney } from '../lib/api';
 import { MpesaPayModal } from '../components/MpesaPay';
-import type { Customer, ServiceItem, Product, Staff, Currency } from '../types';
+import type { Appointment, Customer, ServiceItem, Product, Staff, Currency } from '../types';
 
-interface CartLine { key: string; type: 'service' | 'product'; refId: string; name: string; price: number; currency: Currency; qty: number; staffId?: string; staffName?: string; assistantId?: string; assistantName?: string; assistantFee?: number; }
+interface CartLine { key: string; type: 'service' | 'product'; refId: string; name: string; price: number; currency: Currency; durationMin?: number; qty: number; staffId?: string; staffName?: string; assistantId?: string; assistantName?: string; assistantFee?: number; requiredForAppointment?: boolean; appointmentStaffLocked?: boolean; }
 
-function POS({ onSaleComplete }: { onSaleComplete: () => void }) {
+function POS({ appointment, onSaleComplete }: { appointment?: Appointment | null; onSaleComplete: (appointmentId?: string) => void }) {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [services, setServices] = useState<ServiceItem[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
@@ -22,12 +22,42 @@ function POS({ onSaleComplete }: { onSaleComplete: () => void }) {
   const [showPay, setShowPay] = useState(false);
   const [receipt, setReceipt] = useState<any>(null);
   const [tab, setTab] = useState<'services' | 'products'>('services');
+  const [optionsLoaded, setOptionsLoaded] = useState(false);
+  const seededAppointmentId = useRef<string | null>(null);
 
   useEffect(() => {
-    Promise.all([CustomersApi.list(), ServicesApi.list(), ProductsApi.list(), StaffApi.list()]).then(([c, s, p, st]) => { setCustomers(c); setServices(s); setProducts(p); setStaff(st); });
+    Promise.all([CustomersApi.list(), ServicesApi.list(), ProductsApi.list(), StaffApi.list()]).then(([c, s, p, st]) => { setCustomers(c); setServices(s); setProducts(p); setStaff(st); setOptionsLoaded(true); }).catch(cause => toast(cause instanceof Error ? cause.message : 'Could not load checkout options.', 'error'));
   }, []);
 
-  const addService = (s: ServiceItem) => setCart(c => [...c, { key: `${s.id}-${Date.now()}`, type: 'service', refId: s.id, name: s.name, price: s.price, currency: s.currency, qty: 1 }]);
+  useEffect(() => {
+    if (!appointment) { seededAppointmentId.current = null; return; }
+    if (!optionsLoaded || seededAppointmentId.current === appointment.id) return;
+    const bookedLines = Array.isArray(appointment.items) && appointment.items.length ? appointment.items : [{ serviceId: appointment.serviceId, serviceName: appointment.serviceName, price: appointment.price, currency: appointment.currency, durationMin: appointment.durationMin, staffId: appointment.staffId, staffName: appointment.staffName }];
+    const seededCart = bookedLines.flatMap((bookedLine, index) => {
+      const bookedService = services.find(service => service.id === bookedLine.serviceId);
+      if (!bookedService) return [];
+      const assignedStaffId = bookedLine.staffId || appointment.staffId;
+      const assignedStaff = staff.find(member => member.id === assignedStaffId);
+      return [{ key: `appointment-${appointment.id}-${index}`, type: 'service' as const, refId: bookedService.id, name: bookedLine.serviceName || bookedService.name, price: bookedLine.price ?? appointment.price ?? bookedService.price, currency: bookedLine.currency || appointment.currency || bookedService.currency, durationMin: bookedLine.durationMin || bookedService.durationMin, qty: 1, staffId: assignedStaffId || undefined, staffName: assignedStaff?.name || bookedLine.staffName || appointment.staffName || undefined, requiredForAppointment: true, appointmentStaffLocked: Boolean(assignedStaffId) }];
+    });
+    setCart(seededCart);
+    setCustomerId(appointment.customerId || '');
+    setDiscountPct(0);
+    setPromoCode('');
+    setRedeemPoints(0);
+    setReceipt(null);
+    setTab('services');
+    seededAppointmentId.current = appointment.id;
+  }, [appointment, optionsLoaded, services, staff]);
+
+  const addService = (s: ServiceItem) => {
+    const bookedLine = appointment?.items?.find(line => line.serviceId === s.id);
+    const isBookedService = appointment?.serviceId === s.id || Boolean(bookedLine);
+    const isCategoryOnlyRequest = Boolean(appointment && !appointment.serviceId && !appointment.items?.some(line => line.serviceId));
+    const assignedStaffId = bookedLine?.staffId || (isBookedService ? appointment?.staffId : undefined);
+    const assignedStaff = staff.find(member => member.id === assignedStaffId);
+    setCart(c => [...c, { key: `${s.id}-${Date.now()}`, type: 'service', refId: s.id, name: s.name, price: s.price, currency: s.currency, durationMin: s.durationMin, qty: 1, staffId: assignedStaffId || undefined, staffName: assignedStaff?.name || bookedLine?.staffName || (isBookedService ? appointment?.staffName || undefined : undefined), requiredForAppointment: isBookedService || isCategoryOnlyRequest, appointmentStaffLocked: Boolean(assignedStaffId) }]);
+  };
   const addProduct = (p: Product) => {
     setCart(c => {
       const existing = c.find(l => l.type === 'product' && l.refId === p.id);
@@ -59,16 +89,17 @@ function POS({ onSaleComplete }: { onSaleComplete: () => void }) {
     setCheckingOut(true);
     try {
       const { data } = await OrdersApi.checkout({
-        customerId: selectedCustomer?.id || null,
-        customerName: selectedCustomer?.name || 'Walk-in Customer',
-        items: cart.map(l => ({ type: l.type, refId: l.refId, name: l.name, price: l.price, currency: l.currency, qty: l.qty, staffId: l.staffId || null, staffName: l.staffName || null, assistantId: l.assistantId || null, assistantName: l.assistantName || null, assistantFee: l.assistantId ? Number(l.assistantFee || 0) : 0 })),
+        customerId: selectedCustomer?.id || customerId || null,
+        customerName: selectedCustomer?.name || appointment?.customerName || 'Walk-in Customer',
+        appointmentId: appointment?.id,
+        items: cart.map(l => ({ type: l.type, refId: l.refId, name: l.name, price: l.price, currency: l.currency, durationMin: l.durationMin, qty: l.qty, staffId: l.staffId || null, staffName: l.staffName || null, assistantId: l.assistantId || null, assistantName: l.assistantName || null, assistantFee: l.assistantId ? Number(l.assistantFee || 0) : 0 })),
         discountPct, paymentMethod, promoCode: promoCode.trim() || undefined, redeemPoints: redeemPoints || undefined, mpesaReceiptNumber,
       });
-      setReceipt({ ...data, customerName: selectedCustomer?.name || 'Walk-in Customer', items: cart, paymentMethod, discountPctApplied: discountPct });
+      setReceipt({ ...data, customerName: selectedCustomer?.name || appointment?.customerName || 'Walk-in Customer', items: cart, paymentMethod, discountPctApplied: discountPct });
       setCart([]); setDiscountPct(0); setCustomerId(''); setPromoCode(''); setRedeemPoints(0); setShowPay(false);
-      onSaleComplete();
-    } catch {
-      toast('Checkout failed. Please try again.', 'error');
+      onSaleComplete(appointment?.id);
+    } catch (cause) {
+      toast(cause instanceof Error ? cause.message : 'Checkout failed. Please try again.', 'error');
       setShowPay(false);
     } finally {
       setCheckingOut(false);
@@ -77,6 +108,9 @@ function POS({ onSaleComplete }: { onSaleComplete: () => void }) {
 
   const checkout = () => {
     if (cart.length === 0) { toast('Cart is empty.', 'error'); return; }
+    const requiredAppointmentServiceCount = appointment ? (appointment.items?.length || 1) : 0;
+    const appointmentServicesInCart = cart.filter(line => line.type === 'service' && (line.requiredForAppointment || !appointment?.serviceId));
+    if (appointment && appointmentServicesInCart.length < requiredAppointmentServiceCount) { toast('Add every booked service to the POS cart before charging this appointment.', 'error'); return; }
     const missingStaff = cart.find(l => l.type === 'service' && !l.staffId);
     if (missingStaff) { toast('Assign a staff member to every service before checkout.', 'error'); return; }
     const invalidAssistant = cart.find(line => line.type === 'service' && line.assistantId && (!Number.isFinite(Number(line.assistantFee)) || Number(line.assistantFee) <= 0 || Number(line.assistantFee) > line.price));
@@ -95,7 +129,8 @@ function POS({ onSaleComplete }: { onSaleComplete: () => void }) {
 
   return (
     <div className="space-y-6">
-      <div><h1 className="text-2xl font-semibold tracking-tight flex items-center gap-2"><ShoppingCart size={20} aria-hidden="true" />Point of Sale</h1><p className="text-sm text-[#6E6E73]">Build a cart, assign staff, and take payment in KES or USD.</p></div>
+      <div><h1 className="text-2xl font-semibold tracking-tight flex items-center gap-2"><ShoppingCart size={20} aria-hidden="true" />Point of Sale</h1><p className="text-sm text-[#6E6E73]">{appointment ? `Charge ${appointment.customerName} for their appointment. The appointment completes after checkout.` : 'Build a cart, assign staff, and take payment in KES or USD.'}</p></div>
+      {appointment && <Card className="border-[#2F6BFF]/20 bg-[#2F6BFF]/[0.04] p-4"><p className="text-sm font-semibold">Appointment checkout · {appointment.ticketNumber || appointment.id.slice(0, 8)}</p><p className="mt-1 text-xs text-[#6E6E73]">{appointment.customerName} · {appointment.serviceName} · {appointment.staffName || 'Assign the service provider in the cart'}</p>{!appointment.serviceId && <p className="mt-2 text-xs font-medium text-[#0058b0]">Choose the actual catalog service delivered, then assign the employee in the cart.</p>}</Card>}
 
       <div className="grid lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-4">
@@ -111,7 +146,7 @@ function POS({ onSaleComplete }: { onSaleComplete: () => void }) {
                   <h3 className="text-xs font-semibold text-[#6E6E73] uppercase tracking-wide mb-2">{cat}</h3>
                   <div className="grid sm:grid-cols-2 gap-2">
                     {services.filter(s => s.category === cat).map(s => (
-                      <button key={s.id} onClick={() => addService(s)} className="text-left rounded-2xl border border-black/5 bg-white p-3 hover:border-[#0071e3]/40 hover:shadow-sm transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0071e3]">
+                      <button key={s.id} onClick={() => addService(s)} disabled={Boolean(appointment?.serviceId && appointment.serviceId !== s.id && !appointment.items?.some(item => item.serviceId === s.id))} className="text-left rounded-2xl border border-black/5 bg-white p-3 hover:border-[#0071e3]/40 hover:shadow-sm transition-all disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0071e3]">
                         <p className="font-medium text-sm">{s.name}</p>
                         <p className="text-xs text-[#6E6E73]">{fmtMoney(s.price, s.currency)} · {s.durationMin} min</p>
                       </button>
@@ -143,7 +178,7 @@ function POS({ onSaleComplete }: { onSaleComplete: () => void }) {
                       <p className="text-sm font-medium">{l.name}</p>
                       <p className="text-xs text-[#6E6E73]">{fmtMoney(l.price, l.currency)} × {l.qty}</p>
                     </div>
-                    <button onClick={() => removeLine(l.key)} aria-label={`Remove ${l.name} from cart`} className="text-xs text-[#FF3B30] hover:underline">Remove</button>
+                    {!l.requiredForAppointment && <button onClick={() => removeLine(l.key)} aria-label={`Remove ${l.name} from cart`} className="text-xs text-[#FF3B30] hover:underline">Remove</button>}
                   </div>
                   {l.type === 'product' && (
                     <div className="flex items-center gap-2 mt-1">
@@ -153,7 +188,7 @@ function POS({ onSaleComplete }: { onSaleComplete: () => void }) {
                   )}
                   {l.type === 'service' && (
                     <div className="mt-2 space-y-2">
-                      <Select aria-label={`Assign primary staff for ${l.name}`} className="text-xs py-1.5" value={l.staffId || ''} onChange={e => setLineStaff(l.key, e.target.value)}>
+                      <Select aria-label={`Assign primary staff for ${l.name}`} className="text-xs py-1.5" disabled={l.appointmentStaffLocked} value={l.staffId || ''} onChange={e => setLineStaff(l.key, e.target.value)}>
                         <option value="">Select primary staff…</option>
                         {staff.filter(member => member.employmentStatus !== 'laid-off').map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
                       </Select>

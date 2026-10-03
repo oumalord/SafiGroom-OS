@@ -28,7 +28,7 @@ function StaffPortal() {
 
   useEffect(() => { void load(); }, [load]);
   useEffect(() => {
-    const timer = window.setInterval(() => { void load(true); }, 60000);
+    const timer = window.setInterval(() => { void load(true); }, 15000);
     return () => window.clearInterval(timer);
   }, [load]);
 
@@ -80,7 +80,7 @@ function StaffPortal() {
             <p className="mt-1 text-xs text-[#6E6E73]">Commission {fmtKES(dashboard.weeklyCommissionKES)} + assistant fees {fmtKES(dashboard.weeklyAssistantFeesKES)}</p>
           </div>
         </div>
-        <p className="mt-4 text-[11px] text-[#8b8f98]">Dashboard refreshes automatically every minute.</p>
+        <p className="mt-4 text-[11px] text-[#8b8f98]">Earnings refresh automatically every 15 seconds after POS checkout.</p>
       </Card>
     </div>
   );
