@@ -41,12 +41,12 @@ async function init(): Promise<void> {
         LANGUAGE plpgsql
         AS $fn$
         BEGIN
-          IF OLD.collection = 'messages'
+          IF OLD.collection IN ('messages', 'message_media')
             AND COALESCE(OLD.record->>'createdAt', '') ~ '^[0-9]+$'
             AND (OLD.record->>'createdAt')::numeric < EXTRACT(EPOCH FROM (NOW() - INTERVAL '7 days')) * 1000 THEN
             RETURN OLD;
           END IF;
-          RAISE EXCEPTION 'SafiGroom records are append-only; only messages older than seven days can expire';
+          RAISE EXCEPTION 'SafiGroom records are append-only; only messages and media older than seven days can expire';
         END;
         $fn$`)
       .then(() => undefined);
@@ -120,11 +120,15 @@ export const db = {
   async purgeExpiredMessages() {
     await init();
     const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const expiredMedia = await sql`DELETE FROM app_records WHERE collection = 'message_media'
+      AND COALESCE(record->>'createdAt', '') ~ '^[0-9]+$'
+      AND (record->>'createdAt')::numeric < ${cutoff}
+      RETURNING id`;
     const rows = await sql`DELETE FROM app_records WHERE collection = 'messages'
       AND COALESCE(record->>'createdAt', '') ~ '^[0-9]+$'
       AND (record->>'createdAt')::numeric < ${cutoff}
       RETURNING id`;
-    return rows.length;
+    return rows.length + expiredMedia.length;
   },
   async purgeSalon(salonId: string) {
     await init();

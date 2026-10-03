@@ -196,6 +196,13 @@ export type Role = 'owner' | 'manager' | 'receptionist' | 'barber' | 'customer' 
 
 export type ChatChannel = string;
 
+export interface ChatAttachment {
+  id: string;
+  name: string;
+  mimeType: string;
+  size: number;
+}
+
 export interface ChatMessage {
   id: string;
   channel: ChatChannel;
@@ -206,6 +213,7 @@ export interface ChatMessage {
   replyToId?: string | null;
   replyToSenderName?: string | null;
   replyToText?: string | null;
+  attachment?: ChatAttachment | null;
   createdAt: number;
 }
 

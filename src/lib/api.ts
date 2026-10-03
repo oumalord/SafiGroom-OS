@@ -11,7 +11,7 @@ async function request(path: string, method = 'GET', body?: unknown): Promise<an
   const token = window.localStorage.getItem('safigroom_session');
   const branchId = window.localStorage.getItem('safigroom_selected_branch');
   const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), 15000);
+  const timeout = window.setTimeout(() => controller.abort(), path.startsWith('/api/messages') ? 45000 : 15000);
   try {
     let response: Response;
     try {
@@ -179,7 +179,8 @@ export const AiApi = {
 
 export const MessagesApi = {
   list: (channel: ChatChannel) => api.get(`/api/messages?channel=${encodeURIComponent(channel)}`).then(r => r.data.items as ChatMessage[]),
-  send: (payload: { channel: ChatChannel; text: string; replyToId?: string }) => api.post('/api/messages', payload),
+  send: (payload: { channel: ChatChannel; text: string; replyToId?: string; attachment?: { name: string; mimeType: string; size: number; data: string } }) => api.post('/api/messages', payload),
+  media: (id: string) => api.get(`/api/messages/media/${encodeURIComponent(id)}`).then(r => r.data as { id: string; name: string; mimeType: string; size: number; data: string }),
   unread: () => api.get('/api/messages/unread').then(r => r.data.unreadCount as number),
   markRead: () => api.post('/api/messages/mark-read'),
 };

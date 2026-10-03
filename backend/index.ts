@@ -1417,16 +1417,50 @@ export const handler = router({
     const filtered = (items as any[]).filter(message => message.channel === channel).sort((a, b) => a.createdAt - b.createdAt);
     return json({ items: filtered });
   }],
+  'GET /api/messages/media/:id': [async ({ params }) => {
+    const context = currentContext();
+    if (!context || !['owner', 'manager', 'receptionist', 'barber'].includes(context.role)) return error('Internal team access is required', 403);
+    await db.purgeExpiredMessages();
+    const [media] = await db.get('message_media', [params.id]);
+    if (!media) return error('Attachment not found or expired.', 404);
+    if (media.channel === 'management' && !['owner', 'receptionist'].includes(context.role)) return error('Management channel access is restricted', 403);
+    const [message] = await db.get('messages', [media.messageId]);
+    if (!message || message.attachment?.id !== media.id || message.channel !== media.channel) return error('Attachment not found or expired.', 404);
+    return json({ id: media.id, name: media.name, mimeType: media.mimeType, size: media.size, data: media.data });
+  }],
   'POST /api/messages': [async ({ body }) => {
     const context = currentContext();
     if (!context || !['owner', 'manager', 'receptionist', 'barber'].includes(context.role)) return error('Internal team access is required', 403);
     const channel = String(body?.channel || 'team');
     if (!['team', 'management'].includes(channel)) return error('Unknown message channel', 400);
     if (channel === 'management' && !['owner', 'receptionist'].includes(context.role)) return error('Management channel access is restricted', 403);
-    if (typeof body?.text !== 'string') return error('Message text is required', 400);
-    const text = body.text.trim();
-    if (!text) return error('Message text is required', 400);
+    if (body?.text !== undefined && typeof body.text !== 'string') return error('Message text must be text', 400);
+    const text = String(body?.text || '').trim();
+    const suppliedAttachment = body?.attachment;
+    if (!text && !suppliedAttachment) return error('Write a message or attach a file.', 400);
     if (text.length > 2000) return error('Messages must be 2,000 characters or fewer', 400);
+    const allowedMimeTypes = new Set([
+      'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/heic', 'image/heif',
+      'audio/mpeg', 'audio/mp4', 'audio/ogg', 'audio/wav', 'audio/webm', 'audio/aac', 'audio/3gpp', 'audio/x-m4a',
+      'video/mp4', 'video/webm', 'video/quicktime', 'application/pdf', 'text/plain', 'text/csv',
+      'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'application/vnd.ms-powerpoint', 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      'application/zip', 'application/octet-stream',
+    ]);
+    let upload: { name: string; mimeType: string; size: number; data: string } | null = null;
+    if (suppliedAttachment) {
+      const name = String(suppliedAttachment.name || '').split(/[\\/]/).pop()?.replace(/[\u0000-\u001f]/g, '').trim().slice(0, 180) || 'attachment';
+      const mimeType = String(suppliedAttachment.mimeType || '').toLowerCase().split(';')[0].trim();
+      const data = String(suppliedAttachment.data || '');
+      const size = Number(suppliedAttachment.size || 0);
+      if (!allowedMimeTypes.has(mimeType)) return error('This file type is not supported in messages.', 415);
+      if (!Number.isInteger(size) || size < 1 || size > 2 * 1024 * 1024) return error('Attachments must be 2 MB or smaller.', 413);
+      if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(data)) return error('The attachment data is invalid.', 400);
+      const decodedSize = Buffer.from(data, 'base64').byteLength;
+      if (decodedSize !== size) return error('The attachment size does not match its data.', 400);
+      upload = { name, mimeType, size, data };
+    }
     const replyToId = String(body?.replyToId || '');
     let replyTo: any = null;
     if (replyToId) {
@@ -1438,21 +1472,39 @@ export const handler = router({
     const createdAt = Date.now();
     try {
       await db.purgeExpiredMessages();
-      const [id] = await db.add('messages', [{
+      const id = `message-${randomBytes(12).toString('hex')}`;
+      let attachment: { id: string; name: string; mimeType: string; size: number } | null = null;
+      if (upload) {
+        const [mediaId] = await db.add('message_media', [{
+          id: `message-media-${randomBytes(12).toString('hex')}`,
+          messageId: id,
+          channel,
+          name: upload.name,
+          mimeType: upload.mimeType,
+          size: upload.size,
+          data: upload.data,
+          createdAt,
+        }]);
+        if (!mediaId) return error('Attachment could not be saved. Please retry.', 500);
+        attachment = { id: mediaId, name: upload.name, mimeType: upload.mimeType, size: upload.size };
+      }
+      const [savedMessageId] = await db.add('messages', [{
+        id,
         channel,
         senderId: context.accountId,
         senderName: context.name,
         senderRole: context.role,
         text,
+        attachment,
         replyToId: replyTo?.id || null,
         replyToSenderName: replyTo?.senderName || null,
-        replyToText: replyTo?.text || null,
+        replyToText: replyTo?.text || (replyTo?.attachment?.name ? `Attachment: ${replyTo.attachment.name}` : null),
         createdAt,
       }]);
-      if (!id) return error('Message could not be saved. Please retry.', 500);
-      try { await audit('created', 'message', { id, channel, senderName: context.name }, context.name || context.role); }
+      if (!savedMessageId) return error('Message could not be saved. Please retry.', 500);
+      try { await audit('created', 'message', { id, channel, senderName: context.name, attachment: attachment?.name || null }, context.name || context.role); }
       catch (auditError) { console.error('Message saved but audit logging failed', auditError); }
-      return json({ id, channel, senderId: context.accountId, senderName: context.name, senderRole: context.role, text, createdAt });
+      return json({ id, channel, senderId: context.accountId, senderName: context.name, senderRole: context.role, text, attachment, replyToId: replyTo?.id || null, replyToSenderName: replyTo?.senderName || null, replyToText: replyTo?.text || (replyTo?.attachment?.name ? `Attachment: ${replyTo.attachment.name}` : null), createdAt });
     } catch {
       return error('Message could not be saved. Check your connection and try again.', 503);
     }

@@ -21,7 +21,7 @@ purgeExpiredMessages();
 const messageCleanupTimer = setInterval(purgeExpiredMessages, 60 * 60 * 1000);
 messageCleanupTimer.unref();
 
-app.use(express.json({ limit: '1mb' }));
+app.use(express.json({ limit: '4mb' }));
 app.use((request, response, next) => {
   const origin = String(request.headers.origin || '');
   if (/^https?:\/\/(localhost|127\.0\.0\.1):\d+$/.test(origin)) response.header('Access-Control-Allow-Origin', origin);
