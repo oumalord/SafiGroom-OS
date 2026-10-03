@@ -4,9 +4,9 @@ import { AppointmentsApi, StaffApi } from '../lib/api';
 import { Card, Button, Field, Input, Select, toast } from '../components/ui';
 import type { Staff } from '../types';
 
-function CustomerBooking() {
+function CustomerBooking({ account }: { account: { name?: string; phone?: string; email?: string } }) {
   const [staff, setStaff] = useState<Staff[]>([]);
-  const [form, setForm] = useState({ name: '', phone: '', email: '', serviceCategories: [] as string[], staffId: '' });
+  const [form, setForm] = useState({ name: account.name || '', phone: account.phone || '', email: account.email || '', serviceCategories: [] as string[], staffId: '', preferredDate: '' });
   const [saving, setSaving] = useState(false);
   const [ticket, setTicket] = useState<{ ticketNumber: string; date: string; time: string } | null>(null);
 
@@ -35,6 +35,7 @@ function CustomerBooking() {
         customerEmail: form.email,
         customerPhone: form.phone,
         serviceCategories: form.serviceCategories,
+        date: form.preferredDate || undefined,
         staffId: assigned?.id || null,
         staffName: assigned?.name || null,
       });
@@ -74,6 +75,7 @@ function CustomerBooking() {
           <Field label="Phone" htmlFor="customer-book-phone"><Input id="customer-book-phone" value={form.phone} onChange={event => setForm(current => ({ ...current, phone: event.target.value }))} placeholder="0712345678" /></Field>
         </div>
         <Field label="Email for ticket notifications" htmlFor="customer-book-email"><Input id="customer-book-email" type="email" value={form.email} onChange={event => setForm(current => ({ ...current, email: event.target.value }))} placeholder="you@example.com" /></Field>
+        <Field label="Preferred appointment date" htmlFor="customer-book-date"><Input id="customer-book-date" type="date" min={new Date().toISOString().slice(0, 10)} value={form.preferredDate} onChange={event => setForm(current => ({ ...current, preferredDate: event.target.value }))} /></Field>
         <Field label="Service needed (choose up to two)" htmlFor="customer-book-service"><div id="customer-book-service" className="grid grid-cols-2 gap-2">{serviceCategories.map(category => <button type="button" key={category} onClick={() => toggleCategory(category)} className={`rounded-xl border px-3 py-2.5 text-sm text-left ${form.serviceCategories.includes(category) ? 'border-[#0071e3] bg-[#0071e3]/10 text-[#0058b0]' : 'border-black/10 bg-white'}`}>{category}</button>)}</div></Field>
         <Field label="Preferred employee (optional)" htmlFor="customer-book-staff"><Select id="customer-book-staff" value={form.staffId} onChange={event => setForm(current => ({ ...current, staffId: event.target.value }))}><option value="">No preference</option>{availableStaff.map(member => <option key={member.id} value={member.id}>{member.name}</option>)}</Select></Field>
         <Button className="w-full" onClick={submit} disabled={saving}>{saving ? 'Sending request...' : 'Send booking request'}</Button>

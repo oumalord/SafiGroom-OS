@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Home, Calendar, Users, Scissors, Contact, ShoppingCart, Package, DollarSign, Sparkles, Menu, X, Tag, BarChart3, CreditCard, Percent, ClipboardList, Building2, MessageSquare, Star } from 'lucide-react';
-import { AuthApi, BranchesApi } from './lib/api';
+import { AuthApi, BranchesApi, MessagesApi } from './lib/api';
 import { ToastHost, toast } from './components/ui';
 import type { Branch, Role } from './types';
 import Dashboard from './tabs/Dashboard';
@@ -60,6 +60,7 @@ function normalizeRole(role: unknown): Role {
 
 function initialTabFor(account: any | null): TabKey {
   if (account?.role === 'admin') return 'admin';
+  if (normalizeRole(account?.role) === 'customer') return 'booking';
   const firstAllowed = TABS.find(tab => tab.roles.includes(normalizeRole(account?.role)));
   return firstAllowed?.key || 'dashboard';
 }
@@ -74,6 +75,7 @@ function App() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [account, setAccount] = useState<any | null>(() => AuthApi.account());
   const [branches, setBranches] = useState<Branch[]>([]);
+  const [unreadMessages, setUnreadMessages] = useState(0);
   const [selectedBranchId, setSelectedBranchId] = useState(() => window.localStorage.getItem('safigroom_selected_branch') || '');
   const effectiveRole = normalizeRole(account?.role);
   const reviewSalonId = new URLSearchParams(window.location.search).get('review');
@@ -108,6 +110,23 @@ function App() {
   if (account?.role === 'admin') visibleTabs.sort((first, second) => (first.key === 'admin' ? -1 : second.key === 'admin' ? 1 : 0));
   const isOwner = effectiveRole === 'owner';
 
+  useEffect(() => {
+    if (!account || !['owner', 'manager', 'receptionist', 'barber'].includes(effectiveRole)) { setUnreadMessages(0); return; }
+    let alive = true;
+    const refreshUnread = () => MessagesApi.unread().then(count => { if (alive) setUnreadMessages(count); }).catch(() => {});
+    void refreshUnread();
+    const timer = window.setInterval(() => { void refreshUnread(); }, 12000);
+    return () => { alive = false; window.clearInterval(timer); };
+  }, [account, effectiveRole]);
+
+  const selectTab = (key: TabKey) => {
+    setTab(key);
+    if (key === 'messages') {
+      setUnreadMessages(0);
+      void MessagesApi.markRead().catch(() => {});
+    }
+  };
+
   if (reviewSalonId) return <PublicReviewForm salonId={reviewSalonId} />;
 
   if (!account) return <AuthScreen onAuthenticated={authenticatedAccount => {
@@ -138,12 +157,12 @@ function App() {
               return (
                 <button
                   key={t.key}
-                  onClick={() => setTab(t.key)}
+                  onClick={() => selectTab(t.key)}
                   aria-current={active ? 'page' : undefined}
                         className={`w-full flex items-center gap-2.5 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#4C82FF] ${active ? 'bg-gradient-to-r from-[#2F6BFF] to-[#00A6D6] text-white shadow-lg shadow-[#00A6D6]/20' : 'text-gray-300 hover:bg-white/10 hover:text-white'}`}
                 >
                   <Icon size={16} aria-hidden="true" />
-                  {t.label}
+                  {t.label}{t.key === 'messages' && unreadMessages > 0 && <span aria-label={`${unreadMessages} unread messages`} title={`${unreadMessages} unread messages`} className="ml-auto rounded-full bg-[#FF3B30] px-1.5 py-0.5 text-[10px] leading-none text-white">{unreadMessages}</span>}
                 </button>
               );
             })}
@@ -183,12 +202,12 @@ function App() {
                     return (
                       <button
                         key={t.key}
-                        onClick={() => { setTab(t.key); setMenuOpen(false); }}
+                        onClick={() => { selectTab(t.key); setMenuOpen(false); }}
                         aria-current={active ? 'page' : undefined}
                         className={`flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-medium text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#4C82FF] ${active ? 'bg-gradient-to-r from-[#2F6BFF] to-[#00A6D6] text-white' : 'text-gray-200 hover:bg-white/10'}`}
                       >
                         <Icon size={14} aria-hidden="true" />
-                        {t.label}
+                        {t.label}{t.key === 'messages' && unreadMessages > 0 && <span aria-label={`${unreadMessages} unread messages`} title={`${unreadMessages} unread messages`} className="rounded-full bg-[#FF3B30] px-1.5 py-0.5 text-[10px] leading-none text-white">{unreadMessages}</span>}
                       </button>
                     );
                   })}
@@ -204,12 +223,12 @@ function App() {
                 return (
                   <button
                     key={t.key}
-                    onClick={() => setTab(t.key)}
+                    onClick={() => selectTab(t.key)}
                     aria-current={active ? 'page' : undefined}
                     className={`flex items-center gap-1.5 whitespace-nowrap rounded-full px-3 py-1.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#4C82FF] sm:px-3.5 sm:text-sm ${active ? 'bg-gradient-to-r from-[#2F6BFF] to-[#00A6D6] text-white shadow-md shadow-[#00A6D6]/20' : 'text-gray-300 hover:bg-white/10 hover:text-white'}`}
                   >
                     <Icon size={15} aria-hidden="true" />
-                    {t.label}
+                    {t.label}{t.key === 'messages' && unreadMessages > 0 && <span aria-label={`${unreadMessages} unread messages`} title={`${unreadMessages} unread messages`} className="rounded-full bg-[#FF3B30] px-1.5 py-0.5 text-[10px] leading-none text-white">{unreadMessages}</span>}
                   </button>
                 );
               })}
@@ -239,7 +258,7 @@ function App() {
                 {tab === 'finance' && <Finance />}
                 {tab === 'reports' && <Reports role={effectiveRole} />}
                 {tab === 'ai' && <AIAssistant />}
-                {tab === 'booking' && <CustomerBooking />}
+                {tab === 'booking' && <CustomerBooking account={account} />}
                 {tab === 'logs' && <AuditLogs />}
                 {tab === 'reviews' && effectiveRole === 'owner' && <Reviews />}
                 {tab === 'admin' && account?.role === 'admin' && <Admin />}
@@ -258,12 +277,12 @@ function App() {
                 return (
                   <button
                     key={t.key}
-                    onClick={() => setTab(t.key)}
+                    onClick={() => selectTab(t.key)}
                     aria-current={active ? 'page' : undefined}
                     className={`flex min-w-[70px] flex-col items-center gap-1 rounded-xl px-2 py-2 text-[10px] font-medium transition-colors ${active ? 'bg-gradient-to-r from-[#2F6BFF] to-[#00A6D6] text-white shadow-md shadow-[#00A6D6]/20' : 'text-gray-300'}`}
                   >
                     <Icon size={16} aria-hidden="true" />
-                    <span className="leading-none">{t.label.split(' ')[0]}</span>
+                    <span className="leading-none">{t.label.split(' ')[0]}{t.key === 'messages' && unreadMessages > 0 ? ` · ${unreadMessages}` : ''}</span>
                   </button>
                 );
               })}

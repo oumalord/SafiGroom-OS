@@ -36,6 +36,19 @@ async function init(): Promise<void> {
       .then(() => sql`CREATE INDEX IF NOT EXISTS app_records_tenant_collection_idx ON app_records (tenant_id, collection)`)
       .then(() => sql`CREATE INDEX IF NOT EXISTS app_records_branch_idx ON app_records ((record->>'branchId'), collection)`)
       .then(() => sql`CREATE INDEX IF NOT EXISTS app_records_payment_method_idx ON app_records ((record->>'paymentMethod')) WHERE collection = 'orders'`)
+      .then(() => sql`CREATE OR REPLACE FUNCTION prevent_safigroom_record_delete()
+        RETURNS trigger
+        LANGUAGE plpgsql
+        AS $fn$
+        BEGIN
+          IF OLD.collection = 'messages'
+            AND COALESCE(OLD.record->>'createdAt', '') ~ '^[0-9]+$'
+            AND (OLD.record->>'createdAt')::numeric < EXTRACT(EPOCH FROM (NOW() - INTERVAL '7 days')) * 1000 THEN
+            RETURN OLD;
+          END IF;
+          RAISE EXCEPTION 'SafiGroom records are append-only; only messages older than seven days can expire';
+        END;
+        $fn$`)
       .then(() => undefined);
   }
   await initialized;
@@ -57,6 +70,7 @@ export const db = {
   },
   async list(collection: string, options?: { limit?: number }) {
     await init();
+    if (collection === 'messages') await this.purgeExpiredMessages();
     const limit = Math.min(Math.max(Number(options?.limit || 100), 1), 5000);
     const context = currentContext();
     const tenantId = context?.tenantId || null;
@@ -102,6 +116,15 @@ export const db = {
     const context = currentContext();
     await sql`DELETE FROM app_records WHERE collection = ${collection} AND tenant_id = ${context?.tenantId || null} AND id = ANY(${ids})`;
     return true;
+  },
+  async purgeExpiredMessages() {
+    await init();
+    const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const rows = await sql`DELETE FROM app_records WHERE collection = 'messages'
+      AND COALESCE(record->>'createdAt', '') ~ '^[0-9]+$'
+      AND (record->>'createdAt')::numeric < ${cutoff}
+      RETURNING id`;
+    return rows.length;
   },
   async purgeSalon(salonId: string) {
     await init();

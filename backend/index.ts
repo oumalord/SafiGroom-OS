@@ -376,7 +376,7 @@ export const handler = router({
     const appointment = (appointments as any[]).find(item => item.id === appointmentId && item.customerId === customer.id && item.status === 'completed');
     if (!appointment) return error('Reviews are only available for your completed appointments.', 409);
     if ((reviews as any[]).some(item => item.appointmentId === appointment.id && item.customerId === customer.id)) return error('This appointment already has a review.', 409);
-    const [id] = await db.add('reviews', [{ appointmentId: appointment.id, customerId: customer.id, customerName: customer.name, staffId: appointment.staffId || null, staffName: appointment.staffName || '', serviceName: appointment.serviceName || '', rating, comment: String(body?.comment || '').trim().slice(0, 2000), survey: body?.survey || {}, createdAt: Date.now(), branchId: appointment.branchId || null }]);
+    const [id] = await db.add('reviews', [{ appointmentId: appointment.id, customerId: customer.id, customerName: customer.name, customerEmail: customer.email || email, customerPhone: customer.phone || phone, staffId: appointment.staffId || null, staffName: appointment.staffName || '', serviceName: appointment.serviceName || '', rating, comment: String(body?.comment || '').trim().slice(0, 2000), survey: body?.survey || {}, createdAt: Date.now(), branchId: appointment.branchId || null }]);
     if (!id) return error('Review could not be saved.', 500);
     await withRequestContext({ accountId: 'public-review', tenantId: salonId, salonName: salon.name, role: 'owner', name: customer.name }, () => audit('created', 'review', { id, customerName: customer.name, staffName: appointment.staffName || '', serviceName: appointment.serviceName || '', rating }, customer.name));
     return json({ id });
@@ -394,7 +394,7 @@ export const handler = router({
     await db.add('sessions', [sessionRecord(token, account)]);
     const role = normalizeRole(account.role);
     const mustChangePin = Boolean(account.staffId && role !== 'receptionist' && (account.mustChangePin || !account.pinChangedAt));
-    return json({ token, account: { id: account.id, name: account.name, email: account.email, role, salonId: account.tenantId, salonName: account.salonName, branchId: account.branchId, mustChangePin } });
+    return json({ token, account: { id: account.id, name: account.name, email: account.email, phone: account.phone || '', role, salonId: account.tenantId, salonName: account.salonName, branchId: account.branchId, mustChangePin } });
   }],
   'POST /api/auth/change-pin': [async ({ body }) => {
     const context = currentContext();
@@ -428,7 +428,7 @@ export const handler = router({
     await db.add('accounts', [account]);
     const token = sessionToken();
     await db.add('sessions', [sessionRecord(token, account)]);
-    return json({ token, account: { id: account.id, name, email, role: account.role, salonId, salonName: account.salonName, branchId } });
+    return json({ token, account: { id: account.id, name, email, phone, role: account.role, salonId, salonName: account.salonName, branchId } });
   }],
   'POST /api/auth/demo': [async () => error('Demo administrator access is disabled', 410)],
   'GET /api/admin/directory': [async () => {
@@ -735,8 +735,10 @@ export const handler = router({
     if (!branch) return error('Choose a valid branch for this appointment', 400);
     const requestedCategories = Array.isArray(b.serviceCategories) ? b.serviceCategories.slice(0, 2).filter(Boolean) : [];
     const items = Array.isArray(b.items) && b.items.length ? b.items : b.serviceId ? [{ serviceId: b.serviceId, serviceName: b.serviceName, price: b.price || 0, currency: b.currency || 'KES', durationMin: b.durationMin || 30, staffId: b.staffId, staffName: b.staffName }] : requestedCategories.length ? [{ serviceId: null, serviceName: `Requested: ${requestedCategories.join(' + ')}`, price: 0, currency: 'KES', durationMin: 30, staffId: b.staffId, staffName: b.staffName }] : [];
-    const appointmentDate = b.date || new Date().toISOString().slice(0, 10);
-    const appointmentTime = b.time || '00:00';
+    const requestedDate = String(b.date || '').trim();
+    const appointmentDate = /^\d{4}-\d{2}-\d{2}$/.test(requestedDate) ? requestedDate : new Date().toISOString().slice(0, 10);
+    const hasRequestedTime = /^([01]\d|2[0-3]):[0-5]\d$/.test(String(b.time || ''));
+    const appointmentTime = hasRequestedTime ? String(b.time) : '00:00';
     if (!b.customerName || items.length === 0) return error('Missing required appointment fields', 400);
     for (const it of items) { if (!it.serviceId && !requestedCategories.length) return error('Each service needs a service selected', 400); }
 
@@ -750,7 +752,7 @@ export const handler = router({
     }
 
     for (const existingAppt of existing as any[]) {
-      if (existingAppt.date !== appointmentDate) continue;
+      if (!hasRequestedTime || existingAppt.date !== appointmentDate) continue;
       if (['cancelled', 'no-show', 'completed'].includes(existingAppt.status)) continue;
       const otherSlots = apptSlots(existingAppt);
       for (const ns of newSlots) {
@@ -801,7 +803,7 @@ export const handler = router({
     }]);
     await notifyCustomer(customerEmail, `Booking request received: ticket ${ticketNumber}`, `Your SafiGroom booking request was received. Reception will confirm the exact service and time. Ticket: ${ticketNumber}.`, id);
     await audit('created', 'appointment', { id, customerId: b.customerId || null, customerName: b.customerName, serviceName, staffId: items[0].staffId || null, staffName: staffNames.join(', ') || null, date: appointmentDate, time: appointmentTime, ticketNumber }, b.actor || 'customer');
-    return json({ id, queueId, ticketNumber, date: b.date || null, time: b.time || null });
+    return json({ id, queueId, ticketNumber, date: requestedDate || null, time: b.time || null });
   }],
   'PUT /api/appointments/:id': [async ({ params, body }) => {
     const [existing] = await db.get('appointments', [params.id]);
@@ -1425,14 +1427,26 @@ export const handler = router({
     const text = body.text.trim();
     if (!text) return error('Message text is required', 400);
     if (text.length > 2000) return error('Messages must be 2,000 characters or fewer', 400);
+    const replyToId = String(body?.replyToId || '');
+    let replyTo: any = null;
+    if (replyToId) {
+      await db.purgeExpiredMessages();
+      const { items: recentMessages } = await db.list('messages', { limit: 500 });
+      replyTo = (recentMessages as any[]).find(message => message.id === replyToId && message.channel === channel);
+      if (!replyTo) return error('The message you are replying to has expired or is unavailable.', 404);
+    }
     const createdAt = Date.now();
     try {
+      await db.purgeExpiredMessages();
       const [id] = await db.add('messages', [{
         channel,
         senderId: context.accountId,
         senderName: context.name,
         senderRole: context.role,
         text,
+        replyToId: replyTo?.id || null,
+        replyToSenderName: replyTo?.senderName || null,
+        replyToText: replyTo?.text || null,
         createdAt,
       }]);
       if (!id) return error('Message could not be saved. Please retry.', 500);
@@ -1442,6 +1456,27 @@ export const handler = router({
     } catch {
       return error('Message could not be saved. Check your connection and try again.', 503);
     }
+  }],
+  'GET /api/messages/unread': [async () => {
+    const context = currentContext();
+    if (!context || !['owner', 'manager', 'receptionist', 'barber'].includes(context.role)) return error('Internal team access is required', 403);
+    await db.purgeExpiredMessages();
+    const [account] = await db.get('accounts', [context.accountId]);
+    const { items } = await db.list('messages', { limit: 500 });
+    const since = Number(account?.lastMessagesReadAt || 0);
+    const canSeeManagement = context.role === 'owner' || context.role === 'receptionist';
+    const unreadCount = (items as any[]).filter(message => Number(message.createdAt || 0) > since && message.senderId !== context.accountId && (canSeeManagement || message.channel !== 'management')).length;
+    return json({ unreadCount });
+  }],
+  'POST /api/messages/mark-read': [async () => {
+    const context = currentContext();
+    if (!context || !['owner', 'manager', 'receptionist', 'barber'].includes(context.role)) return error('Internal team access is required', 403);
+    await db.purgeExpiredMessages();
+    const [account] = await db.get('accounts', [context.accountId]);
+    if (!account) return error('Account not found', 404);
+    const readAt = Date.now();
+    await db.update('accounts', [{ id: account.id, record: { ...account, lastMessagesReadAt: readAt } }]);
+    return json({ ok: true, readAt });
   }],
 
   'GET /api/memberships': [async () => { const { items } = await db.list('membership_plans', { limit: 50 }); return json({ items }); }],
@@ -1514,7 +1549,8 @@ export const handler = router({
     if (!appointment || appointment.customerId !== b.customerId || appointment.status !== 'completed') return error('Reviews are available after a completed service', 409);
     const { items: existingReviews } = await db.list('reviews', { limit: 2000 });
     if ((existingReviews as any[]).some(item => item.appointmentId === b.appointmentId && item.customerId === b.customerId)) return error('This appointment already has a review', 409);
-    const [id] = await db.add('reviews', [{ appointmentId: b.appointmentId || null, customerId: b.customerId || null, customerName: b.customerName || 'Customer', staffId: b.staffId || null, staffName: b.staffName || '', serviceName: b.serviceName || '', rating, comment: b.comment || '', survey: b.survey || {}, createdAt: Date.now() }]);
+    const [customer] = await db.get('customers', [b.customerId]);
+    const [id] = await db.add('reviews', [{ appointmentId: b.appointmentId || null, customerId: b.customerId || null, customerName: customer?.name || b.customerName || 'Customer', customerEmail: customer?.email || b.customerEmail || '', customerPhone: customer?.phone || b.customerPhone || '', staffId: b.staffId || null, staffName: b.staffName || '', serviceName: b.serviceName || '', rating, comment: b.comment || '', survey: b.survey || {}, createdAt: Date.now() }]);
     if (!id) return error('Failed to submit review', 500);
     await audit('created', 'review', { id, customerName: b.customerName || 'Customer', staffName: b.staffName || '', serviceName: b.serviceName || '', rating }, b.actor || 'customer');
     return json({ id });

@@ -80,7 +80,7 @@ function Reviews() {
         <div className="space-y-3">
           {reviews.map(review => <Card key={review.id} className="p-4 sm:p-5">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-              <div><p className="font-semibold">{review.customerName}</p><p className="mt-0.5 text-sm text-[#6E6E73]">{review.serviceName || 'Service'}{review.staffName ? ` · ${review.staffName}` : ''}</p></div>
+              <div><p className="font-semibold">{review.customerName}</p>{(review.customerEmail || review.customerPhone) && <p className="mt-0.5 text-xs text-[#6E6E73]">{[review.customerEmail, review.customerPhone].filter(Boolean).join(' · ')}</p>}<p className="mt-0.5 text-sm text-[#6E6E73]">{review.serviceName || 'Service'}{review.staffName ? ` · ${review.staffName}` : ''}</p></div>
               <div className="flex items-center gap-2"><span className="text-sm tracking-wide text-[#D89B00]">{'★'.repeat(Math.max(0, Math.min(5, review.rating)))}{'☆'.repeat(Math.max(0, 5 - review.rating))}</span><Badge tone="warning">{review.rating}/5</Badge><span className="text-xs text-[#6E6E73]">{new Date(review.createdAt).toLocaleString()}</span></div>
             </div>
             {review.comment && <p className="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-[#30343b]">{review.comment}</p>}

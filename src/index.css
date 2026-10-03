@@ -1,3 +1,19 @@
+select.salon-signup-select {
+  color: #1D1D1F !important;
+  background-color: #FFFFFF !important;
+  -webkit-text-fill-color: #1D1D1F;
+  color-scheme: light;
+}
+
+select.salon-signup-select option {
+  color: #1D1D1F !important;
+  background-color: #FFFFFF !important;
+}
+
+select.salon-signup-select:disabled {
+  color: #6E6E73 !important;
+  -webkit-text-fill-color: #6E6E73;
+}
 @tailwind base;
 @tailwind components;
 @tailwind utilities;

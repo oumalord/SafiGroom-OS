@@ -203,6 +203,9 @@ export interface ChatMessage {
   senderName: string;
   senderRole: string;
   text: string;
+  replyToId?: string | null;
+  replyToSenderName?: string | null;
+  replyToText?: string | null;
   createdAt: number;
 }
 
@@ -266,6 +269,8 @@ export interface Review {
   appointmentId: string | null;
   customerId: string | null;
   customerName: string;
+  customerEmail?: string;
+  customerPhone?: string;
   staffId: string | null;
   staffName: string;
   serviceName: string;

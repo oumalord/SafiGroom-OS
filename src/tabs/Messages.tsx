@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { LockKeyhole, MessageSquare, Send, ShieldCheck } from 'lucide-react';
+import { LockKeyhole, MessageSquare, MoreVertical, Reply, Send, ShieldCheck, X } from 'lucide-react';
 import { Button, Card, LoadingState, Textarea, toast } from '../components/ui';
 import { MessagesApi } from '../lib/api';
 import type { ChatChannel, ChatMessage, Role } from '../types';
@@ -19,7 +19,10 @@ function Messages({ role, accountId }: { role: Role; accountId: string }) {
   const [sending, setSending] = useState(false);
   const [loadError, setLoadError] = useState('');
   const [text, setText] = useState('');
+  const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
+  const touchStartX = useRef<number | null>(null);
+  const touchStartY = useRef<number | null>(null);
   const canSeeManagement = role === 'owner' || role === 'receptionist';
 
   useEffect(() => {
@@ -29,7 +32,10 @@ function Messages({ role, accountId }: { role: Role; accountId: string }) {
     const load = async () => {
       try {
         const loaded = await MessagesApi.list(channel);
-        if (alive) setMessages(loaded);
+        if (alive) {
+          setMessages(loaded);
+          void MessagesApi.markRead().catch(() => {});
+        }
       } catch (cause) {
         if (alive) setLoadError(cause instanceof Error ? cause.message : 'Could not load messages.');
       } finally {
@@ -48,8 +54,9 @@ function Messages({ role, accountId }: { role: Role; accountId: string }) {
     if (!trimmed || sending) return;
     setSending(true);
     try {
-      await MessagesApi.send({ channel, text: trimmed });
+      await MessagesApi.send({ channel, text: trimmed, replyToId: replyTo?.id });
       setText('');
+      setReplyTo(null);
       setLoadError('');
       setMessages(await MessagesApi.list(channel));
     } catch (cause) {
@@ -97,13 +104,32 @@ function Messages({ role, accountId }: { role: Role; accountId: string }) {
               {messages.map(message => {
                 const ownMessage = message.senderId === accountId;
                 return (
-                  <div key={message.id} className={`flex ${ownMessage ? 'justify-end' : 'justify-start'}`}>
+                  <div key={message.id} className={`group flex touch-pan-y ${ownMessage ? 'justify-end' : 'justify-start'}`} onTouchStart={event => { touchStartX.current = event.touches[0]?.clientX ?? null; touchStartY.current = event.touches[0]?.clientY ?? null; }} onTouchEnd={event => {
+                    const startX = touchStartX.current;
+                    const startY = touchStartY.current;
+                    const endX = event.changedTouches[0]?.clientX;
+                    const endY = event.changedTouches[0]?.clientY;
+                    if (startX !== null && startY !== null && endX !== undefined && endY !== undefined && Math.abs(endX - startX) > 60 && Math.abs(endX - startX) > Math.abs(endY - startY)) setReplyTo(message);
+                    touchStartX.current = null;
+                    touchStartY.current = null;
+                  }}>
                     <div className={`max-w-[88%] sm:max-w-[75%] ${ownMessage ? 'items-end' : 'items-start'} flex flex-col`}>
                       <div className={`mb-1 flex items-baseline gap-2 px-1 ${ownMessage ? 'flex-row-reverse' : ''}`}>
                         <span className="text-xs font-semibold text-[#30343b]">{ownMessage ? 'You' : message.senderName}</span>
                         <span className="text-[10px] text-[#8b8f98]">{roleLabel(message.senderRole)} · {new Date(message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                       </div>
-                      <p className={`whitespace-pre-wrap break-words rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${ownMessage ? 'rounded-br-md bg-gradient-to-br from-[#2F6BFF] to-[#1478d4] text-white shadow-sm' : 'rounded-bl-md border border-black/5 bg-white text-[#1D1D1F] shadow-sm'}`}>{message.text}</p>
+                      <div className="flex items-center gap-1">
+                        <p className={`whitespace-pre-wrap break-words rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${ownMessage ? 'rounded-br-md bg-gradient-to-br from-[#2F6BFF] to-[#1478d4] text-white shadow-sm' : 'rounded-bl-md border border-black/5 bg-white text-[#1D1D1F] shadow-sm'}`}>
+                          {message.replyToText && <span className={`mb-2 block border-l-2 pl-2 text-xs ${ownMessage ? 'border-white/70 text-white/80' : 'border-[#2F6BFF] text-[#6E6E73]'}`}><span className="block font-semibold">{message.replyToSenderName || 'Message'}</span>{message.replyToText}</span>}
+                          {message.text}
+                        </p>
+                        <details className="relative shrink-0 opacity-100 transition sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100">
+                          <summary aria-label={`Message actions for ${message.senderName}`} className="list-none cursor-pointer rounded-full p-1.5 text-[#6E6E73] hover:bg-black/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2F6BFF]"><MoreVertical size={15} aria-hidden="true" /></summary>
+                          <div role="menu" className={`absolute top-full z-20 mt-1 w-36 rounded-xl border border-black/10 bg-white p-1 shadow-lg ${ownMessage ? 'right-0' : 'left-0'}`}>
+                            <button type="button" role="menuitem" onClick={event => { setReplyTo(message); event.currentTarget.closest('details')?.removeAttribute('open'); }} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-[#1D1D1F] hover:bg-black/5"><Reply size={14} aria-hidden="true" />Reply</button>
+                          </div>
+                        </details>
+                      </div>
                     </div>
                   </div>
                 );
@@ -113,11 +139,14 @@ function Messages({ role, accountId }: { role: Role; accountId: string }) {
           )}
         </div>
 
-        <form onSubmit={event => { event.preventDefault(); void send(); }} className="flex items-end gap-2 border-t border-black/5 bg-white p-3 sm:gap-3 sm:p-4">
-          <Textarea aria-label="Message text" placeholder="Write a message to your team…" rows={1} maxLength={2000} value={text} onChange={event => setText(event.target.value)} className="max-h-32 min-h-[44px] resize-y rounded-2xl bg-[#FAFAFC] py-3" />
-          <Button type="submit" aria-label="Send message" disabled={!text.trim() || sending} className="h-11 w-11 shrink-0 rounded-2xl p-0"><Send size={17} aria-hidden="true" /></Button>
+        <form onSubmit={event => { event.preventDefault(); void send(); }} className="border-t border-black/5 bg-white p-3 sm:p-4">
+          {replyTo && <div className="mb-2 flex items-center justify-between gap-2 rounded-xl border-l-2 border-[#2F6BFF] bg-[#F5F7FA] px-3 py-2"><div className="min-w-0"><p className="text-xs font-semibold text-[#2F6BFF]">Replying to {replyTo.senderName}</p><p className="truncate text-xs text-[#6E6E73]">{replyTo.text}</p></div><button type="button" onClick={() => setReplyTo(null)} aria-label="Cancel reply" className="rounded-full p-1 hover:bg-black/5"><X size={15} /></button></div>}
+          <div className="flex items-end gap-2 sm:gap-3">
+            <Textarea aria-label="Message text" placeholder={replyTo ? 'Write a reply…' : 'Write a message to your team…'} rows={1} maxLength={2000} value={text} onChange={event => setText(event.target.value)} className="max-h-32 min-h-[44px] resize-y rounded-2xl bg-[#FAFAFC] py-3" />
+            <Button type="submit" aria-label="Send message" disabled={!text.trim() || sending} className="h-11 w-11 shrink-0 rounded-2xl p-0"><Send size={17} aria-hidden="true" /></Button>
+          </div>
         </form>
-        <div className="flex justify-between px-5 pb-3 text-[10px] text-[#8b8f98] sm:px-6"><span>Updates automatically every few seconds</span><span>{text.length}/2000</span></div>
+        <div className="flex justify-between gap-3 px-5 pb-3 text-[10px] text-[#8b8f98] sm:px-6"><span>Updates automatically · messages are permanently deleted after 7 days</span><span className="shrink-0">{text.length}/2000</span></div>
       </Card>
     </div>
   );

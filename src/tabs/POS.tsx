@@ -38,11 +38,11 @@ function POS({ onSaleComplete }: { onSaleComplete: () => void }) {
   const removeLine = (key: string) => setCart(c => c.filter(l => l.key !== key));
   const setLineStaff = (key: string, staffId: string) => {
     const s = staff.find(x => x.id === staffId);
-    setCart(c => c.map(l => l.key === key ? { ...l, staffId: s?.id, staffName: s?.name } : l));
+    setCart(c => c.map(l => l.key === key ? { ...l, staffId: s?.id, staffName: s?.name, ...(s?.id && s.id === l.assistantId ? { assistantId: undefined, assistantName: undefined, assistantFee: 0 } : {}) } : l));
   };
   const setLineAssistant = (key: string, assistantId: string) => {
     const assistant = staff.find(member => member.id === assistantId);
-    setCart(lines => lines.map(line => line.key === key ? { ...line, assistantId: assistant?.id, assistantName: assistant?.name, assistantFee: assistant ? Number(line.assistantFee || 0) : 0 } : line));
+    setCart(lines => lines.map(line => line.key === key ? { ...line, assistantId: assistant?.id, assistantName: assistant?.name, assistantFee: assistant && line.assistantId === assistant.id ? Number(line.assistantFee || 0) : 0 } : line));
   };
   const setAssistantFee = (key: string, assistantFee: number) => setCart(lines => lines.map(line => line.key === key ? { ...line, assistantFee: Math.max(0, assistantFee) } : line));
   const setLineQty = (key: string, qty: number) => setCart(c => c.map(l => l.key === key ? { ...l, qty: Math.max(1, qty) } : l));

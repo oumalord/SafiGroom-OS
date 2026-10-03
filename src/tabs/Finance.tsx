@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
-import { Plus, Receipt } from 'lucide-react';
+import { Download, Plus, Receipt } from 'lucide-react';
 import { Card, Button, Badge, Modal, Field, Input, Select, EmptyState, LoadingState, StatCard, toast } from '../components/ui';
-import { DashboardApi, ExpensesApi, PayrollApi, PayoutsApi, fmtMoney } from '../lib/api';
+import { DashboardApi, ExpensesApi, PayrollApi, PayoutsApi, downloadCSV, fmtMoney } from '../lib/api';
 import type { DashboardData, Expense, PayoutBatch, Staff } from '../types';
 
 type Range = 'today' | 'week' | 'month' | 'all';
@@ -60,6 +60,20 @@ function Finance() {
     } finally {
       setPayrollSending(false);
     }
+  };
+
+  const downloadPayroll = () => {
+    const payrollStaff = staff.filter(member => member.compensationType === 'salary' && member.employmentStatus !== 'laid-off');
+    const rows: (string | number)[][] = [
+      ['SafiGroom OS - Payroll Register'],
+      ['Generated', new Date().toLocaleString()],
+      [],
+      ['Employee', 'Role', 'Phone', 'Branch', 'Monthly Salary (KES)'],
+      ...payrollStaff.map(member => [member.name, member.role, member.phone || '', member.branchName || member.branch || '', Number(member.monthlySalary || 0)]),
+      [],
+      ['Total Monthly Payroll (KES)', payrollStaff.reduce((total, member) => total + Number(member.monthlySalary || 0), 0)],
+    ];
+    downloadCSV(`safigroom-payroll-${new Date().toISOString().slice(0, 10)}.csv`, rows);
   };
 
   if (loading && !data) return <LoadingState label="Loading finance data…" />;
@@ -128,7 +142,7 @@ function Finance() {
       )}
 
       <Card className="p-6">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4"><div><h2 className="font-semibold">Payroll</h2><p className="text-xs text-[#6E6E73]">Enter salary amounts and send one M-Pesa B2C batch. Transfers require B2C credentials in the backend environment.</p></div><Button onClick={sendPayroll} disabled={payrollSending}>{payrollSending ? 'Sending…' : 'Send payroll batch'}</Button></div>
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4"><div><h2 className="font-semibold">Payroll</h2><p className="text-xs text-[#6E6E73]">Download the current salary register at any time, or send one M-Pesa B2C batch. Transfers require B2C credentials in the backend environment.</p></div><div className="flex flex-wrap gap-2"><Button variant="secondary" onClick={downloadPayroll}><Download size={16} aria-hidden="true" />Download payroll CSV</Button><Button onClick={sendPayroll} disabled={payrollSending}>{payrollSending ? 'Sending…' : 'Send payroll batch'}</Button></div></div>
         <div className="space-y-2">{staff.filter(member => member.compensationType === 'salary' && member.employmentStatus !== 'laid-off').map(member => <div key={member.id} className="grid grid-cols-[1fr_auto] items-center gap-3 border-b border-black/5 pb-2"><div><p className="text-sm font-medium">{member.name}</p><p className="text-xs text-[#6E6E73]">Monthly salary · {member.phone || 'No phone number'} · {member.branchName || member.branch}</p></div><div className="rounded-xl bg-black/[0.03] px-3 py-2 text-sm font-medium">{fmtMoney(Number(member.monthlySalary || 0), 'KES')} / month</div></div>)}{staff.every(member => member.compensationType !== 'salary' || member.employmentStatus === 'laid-off') && <p className="text-sm text-[#6E6E73]">No active monthly-salary staff yet. Receptionists are configured with a monthly salary when added.</p>}</div>
       </Card>
 

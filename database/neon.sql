@@ -68,6 +68,11 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
+  IF OLD.collection = 'messages'
+    AND COALESCE(OLD.record->>'createdAt', '') ~ '^[0-9]+$'
+    AND (OLD.record->>'createdAt')::numeric < EXTRACT(EPOCH FROM (NOW() - INTERVAL '7 days')) * 1000 THEN
+    RETURN OLD;
+  END IF;
   RAISE EXCEPTION 'SafiGroom records are append-only and cannot be deleted';
 END;
 $$;

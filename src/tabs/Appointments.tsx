@@ -25,7 +25,7 @@ function Appointments({ role }: { role: Role }) {
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState({ customerId: '', customerName: '', customerPhone: '', customerEmail: '', serviceId: '', staffId: '', time: '10:00' });
+  const [form, setForm] = useState({ customerId: '', customerName: '', customerPhone: '', customerEmail: '', serviceId: '', staffId: '', date: todayStr(), time: '10:00' });
   const [editing, setEditing] = useState<Appointment | null>(null);
   const [editForm, setEditForm] = useState({ serviceId: '', date: '', time: '', staffId: '' });
 
@@ -69,11 +69,11 @@ function Appointments({ role }: { role: Role }) {
         customerPhone: customer?.phone || form.customerPhone,
         serviceId: service.id, serviceName: service.name,
         staffId: staffMember?.id || null, staffName: staffMember?.name || null,
-        date, time: form.time, durationMin: service.durationMin, price: service.price,
+        date: form.date, time: form.time, durationMin: service.durationMin, price: service.price,
       });
       toast(`Appointment booked. Payment can be collected at the salon. Ticket ${data.ticketNumber} created.`, 'success');
       setOpen(false);
-      setForm({ customerId: '', customerName: '', customerPhone: '', customerEmail: '', serviceId: '', staffId: '', time: '10:00' });
+      setForm({ customerId: '', customerName: '', customerPhone: '', customerEmail: '', serviceId: '', staffId: '', date: todayStr(), time: '10:00' });
       reload();
     } catch (e: any) {
       toast(e instanceof Error ? e.message : e?.response?.data?.error || 'That time slot is not available.', 'error');
@@ -92,7 +92,7 @@ function Appointments({ role }: { role: Role }) {
     const startMin = toMin(form.time);
     const endMin = startMin + service.durationMin;
     const conflict = staffMember && appts.find(a => {
-      if (a.date !== date) return false;
+      if (a.date !== form.date) return false;
       if (a.staffId !== staffMember.id) return false;
       if (a.status === 'cancelled' || a.status === 'no-show' || a.status === 'completed') return false;
       const s = toMin(a.time);
@@ -203,6 +203,7 @@ function Appointments({ role }: { role: Role }) {
           <Button onClick={handleCreate} disabled={saving || optionsLoading || services.length === 0}>{saving ? 'Booking…' : 'Book Appointment'}</Button>
         </>}>
           <div className="space-y-4">
+            <Field label="Appointment date" htmlFor="appt-date"><Input id="appt-date" type="date" value={form.date} onChange={event => setForm(current => ({ ...current, date: event.target.value }))} /></Field>
             {optionsLoading && <p className="text-sm text-[#6E6E73]" role="status">Loading service and staff options…</p>}
             {!optionsLoading && services.length === 0 && <p className="rounded-xl bg-[#FF9500]/10 px-3 py-2 text-sm text-[#805000]">There are no services in the catalog yet. The owner or manager can add services from the Services tab.</p>}
             {!optionsLoading && staff.length === 0 && <p className="rounded-xl bg-[#FF9500]/10 px-3 py-2 text-sm text-[#805000]">There are no staff accounts yet. The owner or manager can add staff; employee assignment can also be done later.</p>}

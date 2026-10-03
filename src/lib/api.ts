@@ -179,7 +179,9 @@ export const AiApi = {
 
 export const MessagesApi = {
   list: (channel: ChatChannel) => api.get(`/api/messages?channel=${encodeURIComponent(channel)}`).then(r => r.data.items as ChatMessage[]),
-  send: (payload: { channel: ChatChannel; text: string }) => api.post('/api/messages', payload),
+  send: (payload: { channel: ChatChannel; text: string; replyToId?: string }) => api.post('/api/messages', payload),
+  unread: () => api.get('/api/messages/unread').then(r => r.data.unreadCount as number),
+  markRead: () => api.post('/api/messages/mark-read'),
 };
 
 function csvCell(v: string | number): string {
