@@ -3,6 +3,112 @@ import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypt
 
 const DAY = 24 * 3600 * 1000;
 
+function buildEarningLedger(orders: any[], staff: any[], adjustments: any[] = [], paidItems: any[] = []) {
+  const staffById = new Map(staff.map(member => [member.id, member]));
+  const adjustmentByKey = new Map<string, any>();
+  for (const adjustment of [...adjustments].sort((a, b) => Number(a.createdAt || 0) - Number(b.createdAt || 0))) {
+    adjustmentByKey.set(String(adjustment.earningKey), adjustment);
+  }
+  const paidKeys = new Set(paidItems.map(item => String(item.itemKey)));
+  const entries: any[] = [];
+  for (const order of orders) {
+    (order.items || []).forEach((item: any, index: number) => {
+      if (item.type !== 'service') return;
+      const currency = item.currency || 'KES';
+      const serviceRevenue = Math.max(0, Number(item.lineTotalAfterDiscount ?? Number(item.price || 0) * Number(item.qty || 1)) || 0);
+      const commissionableAmount = Math.max(0, Number(item.commissionableAmount ?? serviceRevenue) || 0);
+      if (item.staffId) {
+        const member: any = staffById.get(item.staffId);
+        if (member && member.compensationType !== 'salary' && !String(member.role || '').toLowerCase().includes('reception')) {
+          const commissionPct = Number(member.commissionPct ?? 40);
+          const baseAmount = commissionableAmount * commissionPct / 100;
+          const earningKey = `${order.id}:${index}`;
+          const adjustment = adjustmentByKey.get(earningKey);
+          entries.push({
+            earningKey, orderId: order.id, branchId: order.branchId || null, customerId: order.customerId || null, customerName: order.customerName || 'Walk-in Customer',
+            serviceName: item.name || item.serviceName || 'Service', staffId: member.id, staffName: item.staffName || member.name, staffRole: member.role || '',
+            payoutType: 'commission', currency, createdAt: Number(order.createdAt || 0), serviceRevenue: commissionableAmount,
+            commissionPct, originalAmount: baseAmount, amount: adjustment ? (adjustment.reversed ? 0 : Number(adjustment.amount)) : baseAmount,
+            reversed: Boolean(adjustment?.reversed), adjustmentNote: adjustment?.note || '', adjustedAt: adjustment?.createdAt || null,
+            paid: paidKeys.has(earningKey),
+          });
+        }
+      }
+      const assistantFee = Math.max(0, Number(item.assistantFeeAfterDiscount || 0));
+      if (item.assistantId && assistantFee > 0) {
+        const member: any = staffById.get(item.assistantId);
+        if (member) {
+          const earningKey = `${order.id}:${index}:assistant`;
+          const adjustment = adjustmentByKey.get(earningKey);
+          entries.push({
+            earningKey, orderId: order.id, branchId: order.branchId || null, customerId: order.customerId || null, customerName: order.customerName || 'Walk-in Customer',
+            serviceName: item.name || item.serviceName || 'Service', staffId: member.id, staffName: item.assistantName || member.name, staffRole: member.role || '',
+            payoutType: 'assistant_fee', currency, createdAt: Number(order.createdAt || 0), serviceRevenue: assistantFee,
+            commissionPct: null, originalAmount: assistantFee, amount: adjustment ? (adjustment.reversed ? 0 : Number(adjustment.amount)) : assistantFee,
+            reversed: Boolean(adjustment?.reversed), adjustmentNote: adjustment?.note || '', adjustedAt: adjustment?.createdAt || null,
+            paid: paidKeys.has(earningKey),
+          });
+        }
+      }
+    });
+  }
+  return entries;
+}
+
+function payrollWindow(input: any) {
+  const parse = (value: unknown, time: string) => /^\d{4}-\d{2}-\d{2}$/.test(String(value || '')) ? new Date(`${value}T${time}+03:00`).getTime() : NaN;
+  const from = parse(input?.from, '00:00:00');
+  const to = parse(input?.to, '23:59:59.999');
+  return { from: Number.isFinite(from) ? from : 0, to: Number.isFinite(to) ? to : Date.now() };
+}
+
+async function unpaidPayrollLines(tenantId: string, from: number, to: number) {
+  const [{ items: orders }, { items: staff }, { items: paidItems }, { items: adjustments }] = await Promise.all([
+    db.listAllTenant('orders', tenantId, { limit: 5000 }),
+    db.listAllTenant('staff', tenantId, { limit: 2000 }),
+    db.listAllTenant('payout_items', tenantId, { limit: 10000 }),
+    db.listAllTenant('earning_adjustments', tenantId, { limit: 10000 }),
+  ]);
+  const lines = buildEarningLedger(orders as any[], staff as any[], adjustments as any[], paidItems as any[])
+    .filter(line => line.createdAt >= from && line.createdAt <= to && !line.paid && line.amount > 0 && line.currency === 'KES');
+  const staffById = new Map((staff as any[]).map(member => [member.id, member]));
+  const byStaff = new Map<string, any>();
+  for (const line of lines) {
+    const member: any = staffById.get(line.staffId);
+    const row = byStaff.get(line.staffId) || { staffId: line.staffId, name: line.staffName, role: line.staffRole, phone: member?.phone || '', clients: new Set<string>(), services: 0, commissionKES: 0, assistantFeesKES: 0, totalKES: 0 };
+    row.clients.add(String(line.customerId || line.customerName));
+    row.services += 1;
+    if (line.payoutType === 'assistant_fee') row.assistantFeesKES += line.amount; else row.commissionKES += line.amount;
+    row.totalKES += line.amount;
+    byStaff.set(line.staffId, row);
+  }
+  const rows = Array.from(byStaff.values()).map(row => ({ ...row, clients: row.clients.size, commissionKES: Math.round(row.commissionKES), assistantFeesKES: Math.round(row.assistantFeesKES), totalKES: Math.round(row.totalKES) })).sort((a, b) => a.name.localeCompare(b.name));
+  return { lines, rows };
+}
+
+function summarizeEarnings(entries: any[], staff: any[] = []) {
+  const summaries = new Map<string, any>();
+  for (const member of staff) summaries.set(member.id, {
+    staffId: member.id, staffName: member.name, staffRole: member.role || '', clients: new Set<string>(), entryCount: 0,
+    serviceRevenueByCurrency: {}, commissionByCurrency: {}, assistantFeesByCurrency: {}, totalByCurrency: {},
+  });
+  for (const entry of entries) {
+    let summary = summaries.get(entry.staffId);
+    if (!summary) {
+      summary = { staffId: entry.staffId, staffName: entry.staffName, staffRole: entry.staffRole, clients: new Set<string>(), entryCount: 0, serviceRevenueByCurrency: {}, commissionByCurrency: {}, assistantFeesByCurrency: {}, totalByCurrency: {} };
+      summaries.set(entry.staffId, summary);
+    }
+    summary.clients.add(String(entry.customerId || entry.customerName));
+    summary.entryCount += 1;
+    const currency = entry.currency || 'KES';
+    summary.serviceRevenueByCurrency[currency] = (summary.serviceRevenueByCurrency[currency] || 0) + Number(entry.serviceRevenue || 0);
+    const earningType = entry.payoutType === 'assistant_fee' ? 'assistantFeesByCurrency' : 'commissionByCurrency';
+    summary[earningType][currency] = (summary[earningType][currency] || 0) + Number(entry.amount || 0);
+    summary.totalByCurrency[currency] = (summary.totalByCurrency[currency] || 0) + Number(entry.amount || 0);
+  }
+  return Array.from(summaries.values()).map(summary => ({ ...summary, clients: summary.clients.size })).sort((a, b) => a.staffName.localeCompare(b.staffName));
+}
+
 function passwordHash(password: string, salt = randomBytes(16).toString('hex')) {
   return `${salt}:${scryptSync(password, salt, 64).toString('hex')}`;
 }
@@ -554,10 +660,11 @@ export const handler = router({
   }],
 
   'GET /api/staff': [async () => {
+    const isOwner = currentContext()?.role === 'owner';
     const { items } = await db.list('staff', { limit: 200 });
     return json({ items: (items as any[]).map(member => {
       const isReceptionist = String(member.role || '').toLowerCase().includes('reception');
-      return { ...member, compensationType: member.compensationType || (isReceptionist ? 'salary' : 'commission'), monthlySalary: Number(member.monthlySalary || 0), commissionPct: isReceptionist ? 0 : Number(member.commissionPct ?? 40) };
+      return { ...member, compensationType: member.compensationType || (isReceptionist ? 'salary' : 'commission'), monthlySalary: isOwner ? Number(member.monthlySalary || 0) : 0, commissionPct: isReceptionist ? 0 : Number(member.commissionPct ?? 40) };
     }) });
   }],
   'GET /api/staff/me/dashboard': [async () => {
@@ -567,9 +674,11 @@ export const handler = router({
     if (!account?.staffId) return error('Your staff profile is not linked. Ask the salon owner to check your account.', 404);
     const [member] = await db.get('staff', [account.staffId]);
     if (!member || member.tenantId !== context.tenantId) return error('Your staff profile could not be found for this salon.', 404);
-    const [{ items: orders }, { items: queue }] = await Promise.all([
+    const [{ items: orders }, { items: queue }, { items: adjustments }, { items: paidItems }] = await Promise.all([
       db.listAllTenant('orders', context.tenantId, { limit: 5000 }),
       db.listAllTenant('queue', context.tenantId, { limit: 3000 }),
+      db.listAllTenant('earning_adjustments', context.tenantId, { limit: 10000 }),
+      db.listAllTenant('payout_items', context.tenantId, { limit: 10000 }),
     ]);
     const now = new Date();
     const todayStart = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
@@ -579,31 +688,18 @@ export const handler = router({
     let weeklyCommissionKES = 0;
     let weeklyAssistantFeesKES = 0;
     const clientsToday = new Set<string>();
-    for (const order of orders as any[]) {
-      const createdAt = Number(order.createdAt || 0);
-      if (createdAt < weekStart || createdAt >= now.getTime()) continue;
-      let thisOrderCommissionToday = 0;
-      let thisOrderAssistantFeeToday = 0;
-      for (const item of order.items || []) {
-        if (item.type !== 'service' || item.currency === 'USD') continue;
-        const lineTotal = Number(item.lineTotalAfterDiscount ?? Number(item.price || 0) * Number(item.qty || 1)) || 0;
-        const commissionableAmount = Math.max(0, Number(item.commissionableAmount ?? lineTotal));
-        const assistantFee = Math.max(0, Number(item.assistantFeeAfterDiscount || 0));
-        const isPrimary = item.staffId === member.id;
-        const isAssistant = item.assistantId === member.id;
-        const commission = isPrimary ? commissionableAmount * Number(member.commissionPct ?? 40) / 100 : 0;
-        const assistantEarning = isAssistant ? assistantFee : 0;
-        weeklyCommissionKES += commission;
-        weeklyAssistantFeesKES += assistantEarning;
-        if (createdAt >= todayStart) {
-          thisOrderCommissionToday += commission;
-          thisOrderAssistantFeeToday += assistantEarning;
-          if (isPrimary || isAssistant) clientsToday.add(String(order.customerId || order.customerName || order.id));
-        }
-      }
+    const earningEntries = buildEarningLedger(orders as any[], [member], adjustments as any[], paidItems as any[]);
+    for (const earning of earningEntries) {
+      const createdAt = Number(earning.createdAt || 0);
+      if (earning.staffId !== member.id || earning.currency !== 'KES' || createdAt < weekStart || createdAt >= now.getTime()) continue;
+      const commission = earning.payoutType === 'commission' ? Number(earning.amount || 0) : 0;
+      const assistantFee = earning.payoutType === 'assistant_fee' ? Number(earning.amount || 0) : 0;
+      weeklyCommissionKES += commission;
+      weeklyAssistantFeesKES += assistantFee;
       if (createdAt >= todayStart) {
-        dailyCommissionKES += thisOrderCommissionToday;
-        dailyAssistantFeesKES += thisOrderAssistantFeeToday;
+        dailyCommissionKES += commission;
+        dailyAssistantFeesKES += assistantFee;
+        clientsToday.add(String(earning.customerId || earning.customerName || earning.orderId));
       }
     }
     const dailyEarningsKES = dailyCommissionKES + dailyAssistantFeesKES;
@@ -918,7 +1014,7 @@ export const handler = router({
     let linkedAppointment: any = null;
     const appointmentServiceMatches = new Map<number, any>();
     if (b.appointmentId) {
-      if (!['owner', 'manager', 'receptionist'].includes(context?.role || '')) return error('Only reception or management can charge an appointment through POS.', 403);
+      if (!['owner', 'manager', 'receptionist', 'barber'].includes(context?.role || '')) return error('Only team members can charge an appointment through POS.', 403);
       [linkedAppointment] = await db.get('appointments', [String(b.appointmentId)]);
       if (!linkedAppointment) return error('Appointment not found.', 404);
       if (linkedAppointment.status !== 'in-service') return error('Only an in-service appointment can be charged. Move it to in-service first.', 409);
@@ -1149,6 +1245,63 @@ export const handler = router({
     const { items } = await db.list('payout_batches', { limit: 100 });
     return json({ items: (items as any[]).sort((a, b) => b.createdAt - a.createdAt) });
   }],
+  'GET /api/earnings': [async ({ query }) => {
+    const context = currentContext();
+    let tenantId = context?.tenantId || '';
+    let salonName = context?.salonName || '';
+    if (context?.role === 'admin') {
+      tenantId = String(query.salonId || '').trim();
+      if (!tenantId) return error('Select a salon to view earnings.', 400);
+      const [salon] = await db.get('salons', [tenantId]);
+      if (!salon) return error('Salon not found.', 404);
+      salonName = salon.name || '';
+    } else if (context?.role !== 'owner' || !tenantId) return error('Only the owner or platform admin can manage earnings.', 403);
+
+    const [{ items: orders }, { items: staff }, { items: adjustments }, { items: paidItems }] = await Promise.all([
+      db.listAllTenant('orders', tenantId, { limit: 5000 }),
+      db.listAllTenant('staff', tenantId, { limit: 2000 }),
+      db.listAllTenant('earning_adjustments', tenantId, { limit: 10000 }),
+      db.listAllTenant('payout_items', tenantId, { limit: 10000 }),
+    ]);
+    const entries = buildEarningLedger(orders as any[], staff as any[], adjustments as any[], paidItems as any[])
+      .sort((a, b) => b.createdAt - a.createdAt || a.staffName.localeCompare(b.staffName));
+    return json({ salonId: tenantId, salonName, summaries: summarizeEarnings(entries, staff as any[]), entries });
+  }],
+  'POST /api/earnings/adjust': [async ({ body }) => {
+    const context = currentContext();
+    let tenantId = context?.tenantId || '';
+    let salonName = context?.salonName || '';
+    if (context?.role === 'admin') {
+      tenantId = String(body?.salonId || '').trim();
+      if (!tenantId) return error('Select a salon before adjusting earnings.', 400);
+      const [salon] = await db.get('salons', [tenantId]);
+      if (!salon) return error('Salon not found.', 404);
+      salonName = salon.name || '';
+    } else if (context?.role !== 'owner' || !tenantId) return error('Only the owner or platform admin can adjust earnings.', 403);
+
+    const earningKey = String(body?.earningKey || '').trim();
+    const note = String(body?.note || '').trim().slice(0, 500);
+    const reversed = body?.reversed === true;
+    const amount = Number(body?.amount);
+    if (!earningKey || !note) return error('Select an earning and enter a reason for the change.', 400);
+    if (!reversed && (!Number.isFinite(amount) || amount < 0)) return error('Enter a valid earning amount greater than or equal to zero.', 400);
+
+    const [{ items: orders }, { items: staff }, { items: adjustments }, { items: paidItems }] = await Promise.all([
+      db.listAllTenant('orders', tenantId, { limit: 5000 }),
+      db.listAllTenant('staff', tenantId, { limit: 2000 }),
+      db.listAllTenant('earning_adjustments', tenantId, { limit: 10000 }),
+      db.listAllTenant('payout_items', tenantId, { limit: 10000 }),
+    ]);
+    const earning = buildEarningLedger(orders as any[], staff as any[], adjustments as any[], paidItems as any[]).find(entry => entry.earningKey === earningKey);
+    if (!earning) return error('Earning not found.', 404);
+    if (earning.paid) return error('This earning is already marked paid. Paid earnings cannot be changed; record any recovery separately.', 409);
+    const createdAt = Math.max(Date.now(), ...((adjustments as any[]).map(item => Number(item.createdAt || 0) + 1)), 0);
+    const adjustment = { tenantId, salonName, earningKey, orderId: earning.orderId, staffId: earning.staffId, staffName: earning.staffName, customerName: earning.customerName, serviceName: earning.serviceName, previousAmount: earning.amount, amount: reversed ? 0 : Math.round(amount * 100) / 100, reversed, note, actor: context?.name || 'admin', createdAt };
+    const [id] = await db.add('earning_adjustments', [{ ...adjustment, id: `earning-adjustment-${randomBytes(12).toString('hex')}` }]);
+    if (!id) return error('The earning adjustment could not be saved.', 500);
+    await withRequestContext({ accountId: context!.accountId, tenantId, salonName, branchId: context?.branchId, role: context!.role, name: context!.name }, () => audit(reversed ? 'reversed' : 'adjusted', 'earning', { id, ...adjustment }, context?.name || 'admin'));
+    return json({ id, ...adjustment });
+  }],
   'GET /api/payroll/staff': [async () => {
     const context = currentContext();
     if (context?.role !== 'owner') return error('Only the owner can view payroll staff', 403);
@@ -1158,51 +1311,26 @@ export const handler = router({
       return { ...member, compensationType: member.compensationType || (isReceptionist ? 'salary' : 'commission'), monthlySalary: Number(member.monthlySalary || 0), commissionPct: isReceptionist ? 0 : Number(member.commissionPct ?? 40) };
     }) });
   }],
+  'GET /api/payroll/commissions': [async ({ query }) => {
+    const context = currentContext();
+    if (context?.role !== 'owner') return error('Only the owner can view payroll', 403);
+    const { from, to } = payrollWindow(query);
+    const { rows } = await unpaidPayrollLines(context.tenantId, from, to);
+    return json({ rows, totalKES: rows.reduce((sum, row) => sum + row.totalKES, 0) });
+  }],
   'POST /api/payouts': [async ({ body }) => {
     const context = currentContext();
     if (context?.role !== 'owner') return error('Only the owner can record payouts', 403);
-    const range = body?.range === 'today' || body?.range === 'week' || body?.range === 'month' || body?.range === 'all' ? body.range : 'week';
     const now = Date.now();
-    let from = 0;
-    if (range === 'today') { const day = new Date(); day.setHours(0, 0, 0, 0); from = day.getTime(); }
-    if (range === 'week') from = now - 7 * DAY;
-    if (range === 'month') from = now - 30 * DAY;
-
-    const [{ items: orders }, { items: staff }, { items: paidItems }] = await Promise.all([
-      db.listAllTenant('orders', context.tenantId, { limit: 5000 }),
-      db.listAllTenant('staff', context.tenantId, { limit: 2000 }),
-      db.listAllTenant('payout_items', context.tenantId, { limit: 10000 }),
-    ]);
-    const staffById = new Map((staff as any[]).map(member => [member.id, member]));
-    const alreadyPaid = new Set((paidItems as any[]).map(item => item.itemKey));
-    const lines: any[] = [];
-    for (const order of orders as any[]) {
-      if (!order.createdAt || order.createdAt < from || order.createdAt >= now) continue;
-      (order.items || []).forEach((item: any, index: number) => {
-        if (item.type !== 'service') return;
-        const currency = item.currency || 'KES';
-        const branchId = order.branchId || context.branchId || null;
-        const primaryKey = `${order.id}:${index}`;
-        if (item.staffId && !alreadyPaid.has(primaryKey)) {
-          const member: any = staffById.get(item.staffId);
-          if (member && member.compensationType !== 'salary' && !String(member.role || '').toLowerCase().includes('reception')) {
-            const revenue = Math.max(0, Number(item.commissionableAmount ?? item.lineTotalAfterDiscount ?? Number(item.price || 0) * Number(item.qty || 1)) || 0);
-            const commissionPct = Number(member.commissionPct ?? 40);
-            const commission = revenue * commissionPct / 100;
-            if (commission > 0) lines.push({ itemKey: primaryKey, orderId: order.id, staffId: item.staffId, staffName: item.staffName || member.name, revenue, commission, commissionPct, payoutType: 'commission', currency, branchId, createdAt: now });
-          }
-        }
-        const assistantKey = `${order.id}:${index}:assistant`;
-        const assistantFee = Math.max(0, Number(item.assistantFeeAfterDiscount || 0));
-        if (item.assistantId && assistantFee > 0 && !alreadyPaid.has(assistantKey)) {
-          const assistant: any = staffById.get(item.assistantId);
-          if (assistant) lines.push({ itemKey: assistantKey, orderId: order.id, staffId: assistant.id, staffName: item.assistantName || assistant.name, revenue: assistantFee, commission: assistantFee, assistantFee, payoutType: 'assistant_fee', currency, branchId, createdAt: now });
-        }
-      });
-    }
+    const window = payrollWindow(body);
+    const from = window.from;
+    const range = body?.from || body?.to ? 'custom' : 'all';
+    const { lines: unpaid } = await unpaidPayrollLines(context.tenantId, from, window.to);
+    const lines = unpaid
+      .map(line => ({ ...line, itemKey: line.earningKey, revenue: line.serviceRevenue, commission: line.amount, assistantFee: line.payoutType === 'assistant_fee' ? line.amount : 0, branchId: line.branchId || context.branchId || null, createdAt: now }));
     if (!lines.length) return error('There are no unpaid commissions in this period.', 409);
     const totalKES = lines.filter(line => line.currency === 'KES').reduce((sum, line) => sum + line.commission, 0);
-    const [batchId] = await db.add('payout_batches', [{ range, from, to: now, totalKES, employeeCount: new Set(lines.map(line => line.staffId)).size, itemCount: lines.length, status: 'recorded', createdAt: now }]);
+    const [batchId] = await db.add('payout_batches', [{ range, from, to: window.to, totalKES, employeeCount: new Set(lines.map(line => line.staffId)).size, itemCount: lines.length, status: 'recorded', createdAt: now }]);
     await db.add('payout_items', lines.map(line => ({ ...line, batchId })));
     await audit('recorded', 'payout_batch', { id: batchId, range, totalKES, employeeCount: new Set(lines.map(line => line.staffId)).size, itemCount: lines.length }, 'owner');
     return json({ id: batchId, range, totalKES, employeeCount: new Set(lines.map(line => line.staffId)).size, itemCount: lines.length, status: 'recorded', message: 'Commission and assistant-fee payouts recorded internally. No money was sent.' });
@@ -1210,16 +1338,10 @@ export const handler = router({
   'POST /api/payroll/send': [async ({ body }) => {
     const context = currentContext();
     if (context?.role !== 'owner') return error('Only the owner can send payroll', 403);
-    const recipients = Array.isArray(body?.recipients) ? body.recipients : [];
-    if (!recipients.length) return error('Add at least one employee to payroll', 400);
-    const { items: salonStaff } = await db.listAllTenant('staff', context.tenantId, { limit: 2000 });
-    const staffById = new Map((salonStaff as any[]).map(member => [member.id, member]));
-    for (const recipient of recipients) {
-      const member: any = staffById.get(String(recipient.staffId || ''));
-      if (!member || member.employmentStatus === 'laid-off') return error('Payroll recipient is not an active staff member in this salon.', 400);
-      if (member.compensationType !== 'salary') return error(`${member.name} is commission-paid and cannot be included in salary payroll.`, 400);
-      if (Math.round(Number(recipient.amountKES)) !== Math.round(Number(member.monthlySalary))) return error(`Payroll amount for ${member.name} must match the saved monthly salary.`, 400);
-    }
+    const window = payrollWindow(body);
+    const { rows } = await unpaidPayrollLines(context.tenantId, window.from, window.to);
+    const recipients = rows.map(row => ({ staffId: row.staffId, amountKES: row.totalKES, phone: row.phone })).filter(row => row.amountKES > 0);
+    if (!recipients.length) return error('There are no unpaid commissions in this period.', 409);
     const initiator = process.env.MPESA_B2C_INITIATOR_NAME;
     const securityCredential = process.env.MPESA_B2C_SECURITY_CREDENTIAL;
     const shortcode = process.env.MPESA_B2C_SHORTCODE;
@@ -1264,7 +1386,7 @@ export const handler = router({
     else if (range === 'month') cutoff = now - 30 * DAY;
     else cutoff = 0;
 
-    const [ordersResult, expensesResult, staffResult, productsResult, appointmentsResult, queueResult, customersResult] = await Promise.all([
+    const [ordersResult, expensesResult, staffResult, productsResult, appointmentsResult, queueResult, customersResult, adjustmentsResult] = await Promise.all([
       db.list('orders', { limit: 1000 }),
       db.list('expenses', { limit: 500 }),
       db.list('staff', { limit: 200 }),
@@ -1272,6 +1394,7 @@ export const handler = router({
       db.list('appointments', { limit: 1000 }),
       db.list('queue', { limit: 200 }),
       db.list('customers', { limit: 1000 }),
+      db.list('earning_adjustments', { limit: 10000 }),
     ]);
     const orders = ordersResult.items;
     const expensesAll = expensesResult.items;
@@ -1285,6 +1408,7 @@ export const handler = router({
     const productById = new Map(productsAll.map((p: any) => [p.id, p]));
 
     const rangeOrders = (orders as any[]).filter(o => o.createdAt >= cutoff);
+    const earningByKey = new Map(buildEarningLedger(rangeOrders, staffAll as any[], adjustmentsResult.items as any[]).map(earning => [earning.earningKey, earning]));
     const paymentMethodTotals: Record<'Cash' | 'Card' | 'M-Pesa', number> = { Cash: 0, Card: 0, 'M-Pesa': 0 };
     const revenueByCurrency: Record<string, number> = {};
     for (const o of rangeOrders) {
@@ -1300,7 +1424,7 @@ export const handler = router({
     const staffRevenue = new Map<string, { name: string; currency: string; revenue: number; commission: number; count: number }>();
     const serviceRevenue = new Map<string, { name: string; currency: string; revenue: number; count: number }>();
     for (const o of rangeOrders) {
-      for (const it of (o.items || [])) {
+      for (const [itemIndex, it] of (o.items || []).entries()) {
         const cur = it.currency || 'KES';
         if (it.type === 'product') {
           const p: any = productById.get(it.refId);
@@ -1310,9 +1434,11 @@ export const handler = router({
           const pct = staff && staff.compensationType !== 'salary' && !String(staff.role || '').toLowerCase().includes('reception') ? Number(staff.commissionPct ?? 40) : 0;
           const serviceRevenueAfterDiscount = it.lineTotalAfterDiscount ?? it.price * it.qty;
           const commissionableAmount = Math.max(0, Number(it.commissionableAmount ?? serviceRevenueAfterDiscount));
-          const assistantFee = Math.max(0, Number(it.assistantFeeAfterDiscount || 0));
+          const commissionEarning = earningByKey.get(`${o.id}:${itemIndex}`);
+          const assistantEarning = earningByKey.get(`${o.id}:${itemIndex}:assistant`);
+          const assistantFee = assistantEarning ? Number(assistantEarning.amount || 0) : Math.max(0, Number(it.assistantFeeAfterDiscount || 0));
           assistantFeesByCurrency[cur] = (assistantFeesByCurrency[cur] || 0) + assistantFee;
-          const comm = commissionableAmount * (pct / 100);
+          const comm = commissionEarning ? Number(commissionEarning.amount || 0) : commissionableAmount * (pct / 100);
           commissionsByCurrency[cur] = (commissionsByCurrency[cur] || 0) + comm;
           if (it.staffId) {
             const key = `${it.staffId}|${cur}`;

@@ -27,7 +27,7 @@ function Queue() {
 
   const load = () => { QueueApi.list().then(setItems).catch(() => {}).finally(() => setLoading(false)); };
   useEffect(() => {
-    StaffApi.list().then(setStaff);
+    StaffApi.providers().then(setStaff);
     load();
     const id = setInterval(load, 6000);
     return () => clearInterval(id);

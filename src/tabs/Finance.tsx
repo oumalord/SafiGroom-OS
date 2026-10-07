@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react';
 import { Download, Plus, Receipt } from 'lucide-react';
 import { Card, Button, Badge, Modal, Field, Input, Select, EmptyState, LoadingState, StatCard, toast } from '../components/ui';
 import { DashboardApi, ExpensesApi, PayrollApi, PayoutsApi, downloadCSV, fmtMoney } from '../lib/api';
-import type { DashboardData, Expense, PayoutBatch, Staff } from '../types';
+import Earnings from './Earnings';
+import type { DashboardData, Expense, PayoutBatch, PayrollRow } from '../types';
 
 type Range = 'today' | 'week' | 'month' | 'all';
 
@@ -11,7 +12,9 @@ function Finance() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [payouts, setPayouts] = useState<PayoutBatch[]>([]);
-  const [staff, setStaff] = useState<Staff[]>([]);
+  const [payrollRows, setPayrollRows] = useState<PayrollRow[]>([]);
+  const [payFrom, setPayFrom] = useState('');
+  const [payTo, setPayTo] = useState('');
   const [payrollSending, setPayrollSending] = useState(false);
   const [paying, setPaying] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -20,9 +23,14 @@ function Finance() {
 
   const load = () => {
     setLoading(true);
-    Promise.all([DashboardApi.get(range), ExpensesApi.list(), PayoutsApi.list(), PayrollApi.staff()]).then(([d, e, p, s]) => { setData(d); setExpenses(e); setPayouts(p); setStaff(s); }).finally(() => setLoading(false));
+    Promise.all([DashboardApi.get(range), ExpensesApi.list(), PayoutsApi.list()]).then(([d, e, p]) => { setData(d); setExpenses(e); setPayouts(p); }).finally(() => setLoading(false));
   };
   useEffect(load, [range]);
+
+  const period = { from: payFrom || undefined, to: payTo || undefined };
+  const loadPayroll = () => { PayrollApi.commissions({ from: payFrom, to: payTo }).then(result => setPayrollRows(result.rows)).catch(() => setPayrollRows([])); };
+  useEffect(loadPayroll, [payFrom, payTo]);
+  const payrollTotal = payrollRows.reduce((sum, row) => sum + row.totalKES, 0);
 
   const addExpense = async () => {
     if (!form.category.trim() || form.amount <= 0) { toast('Enter a category and amount greater than zero.', 'error'); return; }
@@ -34,11 +42,14 @@ function Finance() {
   };
 
   const recordPayout = async () => {
+    if (!payrollRows.length) { toast('There are no unpaid commissions in this period.', 'error'); return; }
+    if (!window.confirm(`Mark ${fmtMoney(payrollTotal, 'KES')} as paid for ${payrollRows.length} staff? Their earnings will restart from zero.`)) return;
     setPaying(true);
     try {
-      const { data } = await PayoutsApi.record(range);
-      toast(`${data.employeeCount} employees marked paid: ${fmtMoney(data.totalKES, 'KES')}. No money was sent.`, 'success');
+      const { data } = await PayoutsApi.record(period);
+      toast(`${data.employeeCount} staff marked paid: ${fmtMoney(data.totalKES, 'KES')}. Earnings restart from zero.`, 'success');
       load();
+      loadPayroll();
     } catch (cause: any) {
       toast(cause?.message || 'Could not record the payout.', 'error');
     } finally {
@@ -47,14 +58,13 @@ function Finance() {
   };
 
   const sendPayroll = async () => {
-    const recipients = staff.filter(member => member.compensationType === 'salary' && member.employmentStatus !== 'laid-off' && Number(member.monthlySalary || 0) > 0).map(member => ({ staffId: member.id, amountKES: Number(member.monthlySalary), phone: member.phone }));
-    if (!recipients.length) { toast('No active monthly-salary staff with a configured salary to pay.', 'error'); return; }
-    if (recipients.some(recipient => !/^(?:\+?254|0)[17]\d{8}$/.test(recipient.phone.replace(/\s+/g, '')))) { toast('Every selected employee needs a valid Kenyan phone number.', 'error'); return; }
-    if (!window.confirm(`Send ${fmtMoney(recipients.reduce((sum, recipient) => sum + recipient.amountKES, 0), 'KES')} to ${recipients.length} employees now?`)) return;
+    if (!payrollRows.length) { toast('There are no unpaid commissions in this period.', 'error'); return; }
+    if (payrollRows.some(row => !/^(?:\+?254|0)[17]\d{8}$/.test((row.phone || '').replace(/\s+/g, '')))) { toast('Every staff member being paid needs a valid Kenyan phone number.', 'error'); return; }
+    if (!window.confirm(`Send ${fmtMoney(payrollTotal, 'KES')} to ${payrollRows.length} staff via M-Pesa now?`)) return;
     setPayrollSending(true);
     try {
-      const { data } = await PayrollApi.send(recipients);
-      toast(`Payroll submitted: ${data.sentCount}/${data.employeeCount} transfers accepted by M-Pesa.`, 'success');
+      const { data } = await PayrollApi.send(period);
+      toast(`Payroll submitted: ${data.sentCount}/${data.employeeCount} transfers accepted by M-Pesa. Click Mark all paid once done.`, 'success');
     } catch (cause: any) {
       toast(cause?.message || 'Payroll transfer failed.', 'error');
     } finally {
@@ -63,15 +73,15 @@ function Finance() {
   };
 
   const downloadPayroll = () => {
-    const payrollStaff = staff.filter(member => member.compensationType === 'salary' && member.employmentStatus !== 'laid-off');
     const rows: (string | number)[][] = [
-      ['SafiGroom OS - Payroll Register'],
+      ['SafiGroom OS - Commission Payroll'],
+      ['Period', `${payFrom || 'start'} to ${payTo || 'today'}`],
       ['Generated', new Date().toLocaleString()],
       [],
-      ['Employee', 'Role', 'Phone', 'Branch', 'Monthly Salary (KES)'],
-      ...payrollStaff.map(member => [member.name, member.role, member.phone || '', member.branchName || member.branch || '', Number(member.monthlySalary || 0)]),
+      ['Staff', 'Role', 'Phone', 'Clients', 'Commission (KES)', 'Assistant fees (KES)', 'Total (KES)'],
+      ...payrollRows.map(row => [row.name, row.role, row.phone || '', row.clients, row.commissionKES, row.assistantFeesKES, row.totalKES]),
       [],
-      ['Total Monthly Payroll (KES)', payrollStaff.reduce((total, member) => total + Number(member.monthlySalary || 0), 0)],
+      ['Total (KES)', payrollTotal],
     ];
     downloadCSV(`safigroom-payroll-${new Date().toISOString().slice(0, 10)}.csv`, rows);
   };
@@ -92,7 +102,6 @@ function Finance() {
             <option value="today">Today</option><option value="week">This Week</option><option value="month">This Month</option><option value="all">All Time</option>
           </Select>
           <Button onClick={() => setOpen(true)}><Plus size={16} aria-hidden="true" />Add Expense</Button>
-          <Button variant="secondary" onClick={recordPayout} disabled={paying}>{paying ? 'Recording…' : `Record ${range} staff payouts`}</Button>
         </div>
       </div>
 
@@ -138,16 +147,31 @@ function Finance() {
               </table>
             )}
           </Card>
+          <Earnings />
         </>
       )}
 
       <Card className="p-6">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4"><div><h2 className="font-semibold">Payroll</h2><p className="text-xs text-[#6E6E73]">Download the current salary register at any time, or send one M-Pesa B2C batch. Transfers require B2C credentials in the backend environment.</p></div><div className="flex flex-wrap gap-2"><Button variant="secondary" onClick={downloadPayroll}><Download size={16} aria-hidden="true" />Download payroll CSV</Button><Button onClick={sendPayroll} disabled={payrollSending}>{payrollSending ? 'Sending…' : 'Send payroll batch'}</Button></div></div>
-        <div className="space-y-2">{staff.filter(member => member.compensationType === 'salary' && member.employmentStatus !== 'laid-off').map(member => <div key={member.id} className="grid grid-cols-[1fr_auto] items-center gap-3 border-b border-black/5 pb-2"><div><p className="text-sm font-medium">{member.name}</p><p className="text-xs text-[#6E6E73]">Monthly salary · {member.phone || 'No phone number'} · {member.branchName || member.branch}</p></div><div className="rounded-xl bg-black/[0.03] px-3 py-2 text-sm font-medium">{fmtMoney(Number(member.monthlySalary || 0), 'KES')} / month</div></div>)}{staff.every(member => member.compensationType !== 'salary' || member.employmentStatus === 'laid-off') && <p className="text-sm text-[#6E6E73]">No active monthly-salary staff yet. Receptionists are configured with a monthly salary when added.</p>}</div>
+        <div className="flex flex-col gap-3 mb-4">
+          <div><h2 className="font-semibold">Staff Payroll</h2><p className="text-xs text-[#6E6E73]">Commissions earned by staff only (receptionists are excluded). Pay any day or any period, then mark all paid to restart staff earnings from zero.</p></div>
+          <div className="flex flex-wrap items-end gap-2">
+            <Field label="From" htmlFor="pay-from"><Input id="pay-from" type="date" value={payFrom} max={payTo || undefined} onChange={e => setPayFrom(e.target.value)} /></Field>
+            <Field label="To" htmlFor="pay-to"><Input id="pay-to" type="date" value={payTo} min={payFrom || undefined} onChange={e => setPayTo(e.target.value)} /></Field>
+            <Button variant="secondary" onClick={downloadPayroll} disabled={!payrollRows.length}><Download size={16} aria-hidden="true" />CSV</Button>
+            <Button onClick={sendPayroll} disabled={payrollSending || !payrollRows.length}>{payrollSending ? 'Sending…' : 'Send payroll'}</Button>
+            <Button variant="secondary" onClick={recordPayout} disabled={paying || !payrollRows.length}>{paying ? 'Marking…' : 'Mark all paid'}</Button>
+          </div>
+        </div>
+        {payrollRows.length === 0 ? <p className="text-sm text-[#6E6E73]">No unpaid commissions{payFrom || payTo ? ' in this period' : ''}.</p> : (
+          <div className="space-y-2">
+            {payrollRows.map(row => <div key={row.staffId} className="grid grid-cols-[1fr_auto] items-center gap-3 border-b border-black/5 pb-2"><div><p className="text-sm font-medium">{row.name}</p><p className="text-xs text-[#6E6E73]">{row.role} · {row.phone || 'No phone number'} · {row.clients} client{row.clients === 1 ? '' : 's'} · commission {fmtMoney(row.commissionKES, 'KES')}{row.assistantFeesKES > 0 ? ` + assistant fees ${fmtMoney(row.assistantFeesKES, 'KES')}` : ''}</p></div><div className="rounded-xl bg-black/[0.03] px-3 py-2 text-sm font-semibold">{fmtMoney(row.totalKES, 'KES')}</div></div>)}
+            <div className="flex justify-between pt-2 text-sm font-semibold"><span>Total to pay</span><span>{fmtMoney(payrollTotal, 'KES')}</span></div>
+          </div>
+        )}
       </Card>
 
       <Card className="p-6">
-        <div className="flex items-center justify-between mb-4"><div><h2 className="font-semibold">Recorded payouts</h2><p className="text-xs text-[#6E6E73]">This records internal payment completion only. It does not send money.</p></div></div>
+        <div className="flex items-center justify-between mb-4"><div><h2 className="font-semibold">Recorded payouts</h2><p className="text-xs text-[#6E6E73]">Marking paid restarts staff earnings from zero. It does not send money.</p></div></div>
         {payouts.length === 0 ? <p className="text-sm text-[#6E6E73]">No payout batches recorded yet.</p> : <div className="space-y-2">{payouts.slice(0, 5).map(payout => <div key={payout.id} className="flex items-center justify-between border-b border-black/5 pb-2 text-sm"><span className="capitalize">{payout.range} · {payout.employeeCount} employees</span><span className="font-medium">{fmtMoney(payout.totalKES, 'KES')} · recorded</span></div>)}</div>}
       </Card>
 

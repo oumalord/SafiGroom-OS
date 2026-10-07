@@ -105,7 +105,7 @@ function StaffTab({ role = 'owner' }: { role?: Role }) {
             <div className="w-10 h-10 rounded-full bg-black/5 flex items-center justify-center flex-shrink-0"><User size={18} className="text-[#6E6E73]" aria-hidden="true" /></div>
             <div className="flex-1">
               <p className="font-medium">{s.name}</p>
-              <p className="text-sm text-[#6E6E73]">{s.role} · {s.branchName || s.branch} · {s.chair} · {s.compensationType === 'salary' ? `KES ${Number(s.monthlySalary || 0).toLocaleString()} monthly salary` : `${s.commissionPct ?? 40}% commission`}</p>
+              <p className="text-sm text-[#6E6E73]">{s.role} · {s.branchName || s.branch} · {s.chair} · {s.compensationType === 'salary' ? (role !== 'owner' ? 'Salaried' : `KES ${Number(s.monthlySalary || 0).toLocaleString()} monthly salary`) : `${s.commissionPct ?? 40}% commission`}</p>
               <p className="text-xs text-[#6E6E73]">Worker login: {s.phone || 'Not created'}</p>
               {avgRating(s.id) && <p className="text-xs text-[#6E6E73] flex items-center gap-1 mt-0.5"><Star size={11} className="fill-[#FF9500] text-[#FF9500]" aria-hidden="true" />{avgRating(s.id)!.avg.toFixed(1)} ({avgRating(s.id)!.count} review{avgRating(s.id)!.count === 1 ? '' : 's'})</p>}
             </div>

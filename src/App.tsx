@@ -11,6 +11,7 @@ import CustomersTab from './tabs/Customers';
 import POS from './tabs/POS';
 import Inventory from './tabs/Inventory';
 import Finance from './tabs/Finance';
+import Earnings from './tabs/Earnings';
 import AIAssistant from './tabs/AIAssistant';
 import Services from './tabs/Services';
 import Reports from './tabs/Reports';
@@ -27,7 +28,7 @@ import StaffPinGate from './components/StaffPinGate';
 import PublicReviewForm from './tabs/PublicReviewForm';
 import Reviews from './tabs/Reviews';
 
-type TabKey = 'dashboard' | 'appointments' | 'queue' | 'messages' | 'staff' | 'customers' | 'pos' | 'inventory' | 'services' | 'memberships' | 'promotions' | 'reports' | 'finance' | 'ai' | 'booking' | 'logs' | 'admin' | 'reviews';
+type TabKey = 'dashboard' | 'appointments' | 'queue' | 'messages' | 'staff' | 'customers' | 'pos' | 'inventory' | 'services' | 'memberships' | 'promotions' | 'reports' | 'finance' | 'earnings' | 'ai' | 'booking' | 'logs' | 'admin' | 'reviews';
 
 const TABS: { key: TabKey; label: string; icon: any; roles: Role[] }[] = [
   { key: 'dashboard', label: 'Dashboard', icon: Home, roles: ['owner', 'customer', 'barber'] },
@@ -39,9 +40,10 @@ const TABS: { key: TabKey; label: string; icon: any; roles: Role[] }[] = [
   { key: 'memberships', label: 'Memberships', icon: CreditCard, roles: ['owner'] },
   { key: 'promotions', label: 'Promotions', icon: Percent, roles: ['owner', 'manager', 'receptionist'] },
   { key: 'customers', label: 'Customers', icon: Contact, roles: ['owner', 'manager'] },
-  { key: 'pos', label: 'Point of Sale', icon: ShoppingCart, roles: ['owner', 'manager', 'receptionist'] },
+  { key: 'pos', label: 'Point of Sale', icon: ShoppingCart, roles: ['owner', 'manager', 'receptionist', 'barber'] },
   { key: 'inventory', label: 'Inventory', icon: Package, roles: ['owner'] },
   { key: 'finance', label: 'Finance', icon: DollarSign, roles: ['owner'] },
+  { key: 'earnings', label: 'Earnings', icon: DollarSign, roles: ['admin'] },
   { key: 'reports', label: 'Reports', icon: BarChart3, roles: ['owner', 'manager'] },
   { key: 'ai', label: 'AI Assistant', icon: Sparkles, roles: ['owner'] },
   { key: 'booking', label: 'Book Appointment', icon: Calendar, roles: ['customer'] },
@@ -254,9 +256,10 @@ function App() {
                 {tab === 'memberships' && <Memberships />}
                 {tab === 'promotions' && <Promotions role={effectiveRole} />}
                 {tab === 'customers' && <CustomersTab />}
-                {tab === 'pos' && <POS appointment={appointmentForCheckout} onSaleComplete={completedAppointmentId => { toast(completedAppointmentId ? 'Appointment charged and completed. Staff commissions were recorded.' : 'Sale completed and recorded.', 'success'); if (completedAppointmentId) setAppointmentForCheckout(null); }} />}
+                {tab === 'pos' && <POS appointment={appointmentForCheckout} onSaleComplete={completedAppointmentId => { toast(completedAppointmentId ? 'Appointment charged and completed. Staff commissions were recorded.' : 'Sale completed and recorded.', 'success'); setAppointmentForCheckout(null); setTab('appointments'); }} />}
                 {tab === 'inventory' && <Inventory />}
                 {tab === 'finance' && <Finance />}
+                {tab === 'earnings' && account?.role === 'admin' && <Earnings platformAdmin />}
                 {tab === 'reports' && <Reports role={effectiveRole} />}
                 {tab === 'ai' && <AIAssistant />}
                 {tab === 'booking' && <CustomerBooking account={account} />}

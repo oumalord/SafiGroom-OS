@@ -26,7 +26,7 @@ function POS({ appointment, onSaleComplete }: { appointment?: Appointment | null
   const seededAppointmentId = useRef<string | null>(null);
 
   useEffect(() => {
-    Promise.all([CustomersApi.list(), ServicesApi.list(), ProductsApi.list(), StaffApi.list()]).then(([c, s, p, st]) => { setCustomers(c); setServices(s); setProducts(p); setStaff(st); setOptionsLoaded(true); }).catch(cause => toast(cause instanceof Error ? cause.message : 'Could not load checkout options.', 'error'));
+    Promise.all([CustomersApi.list(), ServicesApi.list(), ProductsApi.list(), StaffApi.providers()]).then(([c, s, p, st]) => { setCustomers(c); setServices(s); setProducts(p); setStaff(st); setOptionsLoaded(true); }).catch(cause => toast(cause instanceof Error ? cause.message : 'Could not load checkout options.', 'error'));
   }, []);
 
   useEffect(() => {
@@ -84,6 +84,21 @@ function POS({ appointment, onSaleComplete }: { appointment?: Appointment | null
   for (const cur of currencies) totalByCurrency[cur] = Math.round((subtotalByCurrency[cur] || 0) * (1 - discountPct / 100));
 
   const selectedCustomer = customers.find(c => c.id === customerId);
+
+  const splitLines = cart.filter(l => l.type === 'service').map(l => {
+    const total = Math.round(l.price * l.qty * (1 - discountPct / 100));
+    const assistantFee = l.assistantId ? Math.min(total, Math.round(Number(l.assistantFee || 0) * l.qty)) : 0;
+    const commissionable = Math.max(0, total - assistantFee);
+    const primary = staff.find(member => member.id === l.staffId);
+    const pct = Number(primary?.commissionPct ?? 40);
+    const commission = commissionable * pct / 100;
+    return { key: l.key, name: l.name, currency: l.currency, total, pct, primaryName: primary?.name, commission, assistantName: l.assistantId ? l.assistantName : undefined, assistantFee, salonShare: total - commission - assistantFee };
+  });
+  const earnerTotals = new Map<string, { name: string; currency: string; amount: number }>();
+  for (const line of splitLines) {
+    if (line.primaryName && line.commission > 0) { const k = `${line.primaryName}:${line.currency}`; earnerTotals.set(k, { name: line.primaryName, currency: line.currency, amount: (earnerTotals.get(k)?.amount || 0) + line.commission }); }
+    if (line.assistantName && line.assistantFee > 0) { const k = `${line.assistantName}:${line.currency}`; earnerTotals.set(k, { name: line.assistantName, currency: line.currency, amount: (earnerTotals.get(k)?.amount || 0) + line.assistantFee }); }
+  }
 
   const doCheckout = async (mpesaReceiptNumber?: string) => {
     setCheckingOut(true);
@@ -223,6 +238,24 @@ function POS({ appointment, onSaleComplete }: { appointment?: Appointment | null
               </Select>
             </Field>
           </div>
+
+          {splitLines.length > 0 && (
+            <div className="mt-4 rounded-2xl bg-[#F5F7FA] p-3 text-xs" aria-label="Commission breakdown">
+              <p className="mb-2 text-sm font-semibold">Commission breakdown</p>
+              <div className="space-y-2">
+                {splitLines.map(line => (
+                  <div key={line.key} className="space-y-0.5 border-b border-black/5 pb-2 last:border-0 last:pb-0">
+                    <div className="flex justify-between font-medium"><span>{line.name}</span><span>{fmtMoney(line.total, line.currency)}</span></div>
+                    <div className="flex justify-between text-[#6E6E73]"><span>{line.primaryName ? `${line.primaryName} (${line.pct}% of ${fmtMoney(line.total - line.assistantFee, line.currency)})` : 'Primary staff not selected'}</span><span>{fmtMoney(Math.round(line.commission), line.currency)}</span></div>
+                    {line.assistantName && <div className="flex justify-between text-[#6E6E73]"><span>{line.assistantName} (assistant fee)</span><span>{fmtMoney(line.assistantFee, line.currency)}</span></div>}
+                    <div className="flex justify-between text-[#6E6E73]"><span>Salon keeps</span><span>{fmtMoney(Math.round(line.salonShare), line.currency)}</span></div>
+                  </div>
+                ))}
+              </div>
+              {earnerTotals.size > 0 && <div className="mt-2 border-t border-black/10 pt-2"><p className="mb-1 font-semibold">Each person receives</p>{Array.from(earnerTotals.values()).map(e => <div key={`${e.name}:${e.currency}`} className="flex justify-between"><span>{e.name}</span><span className="font-semibold">{fmtMoney(Math.round(e.amount), e.currency)}</span></div>)}</div>}
+              {(promoCode.trim() || redeemPoints > 0) && <p className="mt-2 text-[10px] text-[#8b8f98]">Promo or loyalty discounts applied at checkout may change these amounts slightly. Final figures appear on each staff dashboard.</p>}
+            </div>
+          )}
 
           <div className="border-t border-black/5 mt-4 pt-4 space-y-1 text-sm">
             {currencies.length === 0 ? (

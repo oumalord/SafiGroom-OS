@@ -11,7 +11,7 @@ function CustomerBooking({ account }: { account: { name?: string; phone?: string
   const [ticket, setTicket] = useState<{ ticketNumber: string; date: string; time: string } | null>(null);
 
   useEffect(() => {
-    StaffApi.list().then(loadedStaff => {
+    StaffApi.providers().then(loadedStaff => {
       setStaff(loadedStaff);
     }).catch(() => toast('Could not load booking options.', 'error'));
   }, []);

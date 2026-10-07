@@ -1,4 +1,4 @@
-import type { Staff, StaffPortalDashboard, ServiceItem, Customer, Appointment, QueueEntry, Product, Order, Expense, DashboardData, RebookingItem, ChatChannel, ChatMessage, Currency, MembershipPlan, Promotion, Review, AuditLog, Branch, PayoutBatch } from '../types';
+import type { Staff, StaffPortalDashboard, ServiceItem, Customer, Appointment, QueueEntry, Product, Order, Expense, DashboardData, RebookingItem, ChatChannel, ChatMessage, Currency, MembershipPlan, Promotion, Review, AuditLog, Branch, PayoutBatch, PayrollRow, EarningEntry, EarningSummary } from '../types';
 
 const api = {
   get: async (path: string) => ({ data: await request(path) }),
@@ -97,6 +97,7 @@ export const AdminApi = {
 };
 
 export const StaffApi = {
+  providers: () => StaffApi.list().then(items => items.filter(member => !String(member.role || '').toLowerCase().includes('reception') && member.compensationType !== 'salary')),
   list: () => cached('staff:list', 20000, () => api.get('/api/staff').then(r => r.data.items as Staff[])),
   create: (s: Partial<Staff>) => api.post('/api/staff', s).then(r => { invalidate('staff'); return r; }),
   update: (id: string, patch: Partial<Staff>) => api.put(`/api/staff/${id}`, patch).then(r => { invalidate('staff'); return r; }),
@@ -157,12 +158,18 @@ export const ExpensesApi = {
 
 export const PayoutsApi = {
   list: () => api.get('/api/payouts').then(r => r.data.items as PayoutBatch[]),
-  record: (range: 'today' | 'week' | 'month' | 'all') => api.post('/api/payouts', { range }),
+  record: (period: { from?: string; to?: string }) => api.post('/api/payouts', period).then(r => { invalidate('dashboard'); return r; }),
+};
+
+export const EarningsApi = {
+  list: (salonId?: string) => api.get(`/api/earnings${salonId ? `?salonId=${encodeURIComponent(salonId)}` : ''}`).then(r => r.data as { salonId: string; salonName: string; summaries: EarningSummary[]; entries: EarningEntry[] }),
+  adjust: (payload: { earningKey: string; amount?: number; reversed?: boolean; note: string; salonId?: string }) => api.post('/api/earnings/adjust', payload),
 };
 
 export const PayrollApi = {
   staff: () => api.get('/api/payroll/staff').then(r => r.data.items as Staff[]),
-  send: (recipients: { staffId: string; amountKES: number; phone: string }[]) => api.post('/api/payroll/send', { recipients }),
+  commissions: (period: { from?: string; to?: string }) => api.get(`/api/payroll/commissions?${new URLSearchParams(Object.entries(period).filter(([, value]) => value) as [string, string][])}`).then(r => r.data as { rows: PayrollRow[]; totalKES: number }),
+  send: (period: { from?: string; to?: string }) => api.post('/api/payroll/send', period),
 };
 
 export const DashboardApi = {

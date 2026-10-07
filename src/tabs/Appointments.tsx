@@ -32,7 +32,7 @@ function Appointments({ role, onChargeAppointment }: { role: Role; onChargeAppoi
   const loadOptions = () => {
     setOptionsLoading(true);
     const customersRequest = role === 'owner' || role === 'manager' ? CustomersApi.list() : Promise.resolve([] as Customer[]);
-    Promise.all([StaffApi.list(), ServicesApi.list(), customersRequest])
+    Promise.all([StaffApi.providers(), ServicesApi.list(), customersRequest])
       .then(([loadedStaff, loadedServices, loadedCustomers]) => {
         setStaff(loadedStaff);
         setServices(loadedServices);
@@ -188,8 +188,7 @@ function Appointments({ role, onChargeAppointment }: { role: Role; onChargeAppoi
                       {staff.filter(s => s.status === 'available' || s.id === a.staffId).map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
                     </Select>
                   )}
-                {a.status === 'in-service' && ['owner', 'manager', 'receptionist'].includes(role) && <Button size="sm" onClick={() => onChargeAppointment(a)}><ShoppingCart size={14} aria-hidden="true" />Charge in POS</Button>}
-                {a.status === 'in-service' && role === 'barber' && <span className="self-center text-xs text-[#6E6E73]">Awaiting POS checkout</span>}
+                {a.status === 'in-service' && ['owner', 'manager', 'receptionist', 'barber'].includes(role) && <Button size="sm" onClick={() => onChargeAppointment(a)}><ShoppingCart size={14} aria-hidden="true" />Charge in POS</Button>}
                 {STATUS_FLOW[a.status] && <Button size="sm" variant="secondary" onClick={() => advance(a)}>Mark {STATUS_FLOW[a.status]?.replace('-', ' ')}</Button>}
                 {!['completed', 'cancelled', 'no-show'].includes(a.status) && <Button size="sm" variant="ghost" onClick={() => setStatus(a, 'no-show')}>No-show</Button>}
                 {!['completed', 'cancelled'].includes(a.status) && <Button size="sm" variant="danger" onClick={() => setStatus(a, 'cancelled')}>Cancel</Button>}

@@ -172,9 +172,21 @@ export interface Expense {
   date: string;
 }
 
+export interface PayrollRow {
+  staffId: string;
+  name: string;
+  role: string;
+  phone: string;
+  clients: number;
+  services: number;
+  commissionKES: number;
+  assistantFeesKES: number;
+  totalKES: number;
+}
+
 export interface PayoutBatch {
   id: string;
-  range: 'today' | 'week' | 'month' | 'all';
+  range: 'today' | 'week' | 'month' | 'all' | 'custom';
   from: number;
   to: number;
   totalKES: number;
@@ -182,6 +194,40 @@ export interface PayoutBatch {
   itemCount: number;
   status: 'recorded';
   createdAt: number;
+}
+
+export interface EarningEntry {
+  earningKey: string;
+  orderId: string;
+  customerId: string | null;
+  customerName: string;
+  serviceName: string;
+  staffId: string;
+  staffName: string;
+  staffRole?: string;
+  payoutType: 'commission' | 'assistant_fee';
+  currency: Currency | string;
+  createdAt: number;
+  serviceRevenue: number;
+  commissionPct: number | null;
+  originalAmount: number;
+  amount: number;
+  reversed: boolean;
+  adjustmentNote: string;
+  adjustedAt: number | null;
+  paid: boolean;
+}
+
+export interface EarningSummary {
+  staffId: string;
+  staffName: string;
+  staffRole?: string;
+  clients: number;
+  entryCount: number;
+  serviceRevenueByCurrency: Record<string, number>;
+  commissionByCurrency: Record<string, number>;
+  assistantFeesByCurrency: Record<string, number>;
+  totalByCurrency: Record<string, number>;
 }
 
 export interface PayrollResult {
