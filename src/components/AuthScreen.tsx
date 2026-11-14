@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Building2, LogIn, UserPlus } from 'lucide-react';
+import { LogIn, UserPlus } from 'lucide-react';
 import { AuthApi, PublicApi } from '../lib/api';
 import { Button, Card, Field, Input, Select, ToastHost, toast } from './ui';
 
@@ -55,8 +55,8 @@ export default function AuthScreen({ onAuthenticated }: { onAuthenticated: (acco
       <div className="relative z-10 flex min-h-screen items-center justify-center p-3 sm:p-4">
         <Card className="w-full max-w-[92vw] p-4 sm:max-w-md sm:p-7 border border-white/20 bg-white/10 text-white shadow-2xl shadow-[#040b1c]/50 backdrop-blur-md">
           <div className="text-center mb-6">
-            <div className="mx-auto w-12 h-12 rounded-2xl bg-gradient-to-br from-[#2F6BFF] to-[#00A6D6] text-white flex items-center justify-center"><Building2 size={23} aria-hidden="true" /></div>
-            <h1 className="text-2xl font-semibold mt-4 text-white">SafiGroom OS</h1>
+            <img src="/safigroom-logo.png" alt="SafiGroom OS" className="mx-auto mb-4 w-36 max-w-full rounded-lg" />
+            <h1 className="sr-only">SafiGroom OS</h1>
             <p className="text-sm text-slate-200">Salon operations and customer care</p>
           </div>
           <div className="flex gap-1 bg-black/20 rounded-full p-1 mb-5 border border-white/10">

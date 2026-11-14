@@ -150,7 +150,7 @@ function App() {
       {isOwner && (
         <aside className="hidden md:flex md:flex-col md:w-64 md:flex-shrink-0 bg-black/45 backdrop-blur-2xl border-r border-white/10 md:h-screen md:sticky md:top-0">
           <div className="flex items-center gap-2 px-5 h-16 border-b border-white/10 flex-shrink-0">
-            <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-[#2F6BFF] to-[#00A6D6] flex items-center justify-center text-white font-semibold shadow-lg shadow-[#00A6D6]/20">S</div>
+            <img src="/safigroom-logo.png" alt="" className="h-8 w-12 shrink-0 rounded-md object-contain" />
             <span className="font-semibold tracking-tight text-lg text-white">SafiGroom <span className="bg-gradient-to-r from-[#8bb7ff] to-[#61e6ff] bg-clip-text text-transparent">OS</span></span>
           </div>
           <nav aria-label="Main sections" className="flex-1 overflow-y-auto px-3 py-4 space-y-1">
@@ -182,7 +182,7 @@ function App() {
         <header className="sticky top-0 z-40 border-b border-white/10 bg-black/40 backdrop-blur-2xl">
           <div className="mx-auto flex h-16 max-w-7xl items-center justify-between gap-2 px-3 sm:px-6">
             <div className={`flex min-w-0 items-center gap-2 ${isOwner ? 'md:hidden' : ''}`}>
-              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-[#2F6BFF] to-[#00A6D6] text-sm font-semibold text-white shadow-lg shadow-[#00A6D6]/20">S</div>
+              <img src="/safigroom-logo.png" alt="" className="h-8 w-12 shrink-0 rounded-md object-contain" />
               <span className="truncate text-base font-semibold tracking-tight text-white sm:text-lg">SafiGroom <span className="bg-gradient-to-r from-[#8bb7ff] to-[#61e6ff] bg-clip-text text-transparent">OS</span></span>
             </div>
             {isOwner && <div className="hidden md:block font-semibold text-white">{visibleTabs.find(t => t.key === tab)?.label}</div>}
