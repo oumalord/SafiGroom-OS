@@ -1,5 +1,5 @@
 import { router, json, error, db, ai, storage, currentContext, withRequestContext } from './runtime.ts';
-import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto';
 
 const DAY = 24 * 3600 * 1000;
 
@@ -9,7 +9,11 @@ function buildEarningLedger(orders: any[], staff: any[], adjustments: any[] = []
   for (const adjustment of [...adjustments].sort((a, b) => Number(a.createdAt || 0) - Number(b.createdAt || 0))) {
     adjustmentByKey.set(String(adjustment.earningKey), adjustment);
   }
-  const paidKeys = new Set(paidItems.map(item => String(item.itemKey)));
+  const payoutState = new Map<string, boolean>();
+  for (const item of [...paidItems].sort((a, b) => Number(a.createdAt || 0) - Number(b.createdAt || 0))) {
+    if (item.itemKey) payoutState.set(String(item.itemKey), !item.reversed);
+  }
+  const paidKeys = new Set([...payoutState].filter(([, paid]) => paid).map(([itemKey]) => itemKey));
   const entries: any[] = [];
   for (const order of orders) {
     (order.items || []).forEach((item: any, index: number) => {
@@ -62,28 +66,171 @@ function payrollWindow(input: any) {
   return { from: Number.isFinite(from) ? from : 0, to: Number.isFinite(to) ? to : Date.now() };
 }
 
+function payrollMonthWindow(value: unknown) {
+  const salaryMonth = String(value || '');
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(salaryMonth)) return null;
+  const currentMonth = new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString().slice(0, 7);
+  if (salaryMonth > currentMonth) return null;
+  const [year, month] = salaryMonth.split('-').map(Number);
+  const from = Date.UTC(year, month - 1, 1) - 3 * 60 * 60 * 1000;
+  const to = Date.UTC(year, month, 1) - 3 * 60 * 60 * 1000 - 1;
+  return { salaryMonth, from, to };
+}
+
 async function unpaidPayrollLines(tenantId: string, from: number, to: number) {
-  const [{ items: orders }, { items: staff }, { items: paidItems }, { items: adjustments }] = await Promise.all([
+  const [{ items: orders }, { items: staff }, { items: paidItems }, { items: adjustments }, { items: payrollItems }] = await Promise.all([
     db.listAllTenant('orders', tenantId, { limit: 5000 }),
     db.listAllTenant('staff', tenantId, { limit: 2000 }),
     db.listAllTenant('payout_items', tenantId, { limit: 10000 }),
     db.listAllTenant('earning_adjustments', tenantId, { limit: 10000 }),
+    db.listAllTenant('payroll_items', tenantId, { limit: 10000 }),
   ]);
+  const payoutState = new Map<string, boolean>();
+  for (const item of [...(paidItems as any[])].sort((a, b) => Number(a.createdAt || 0) - Number(b.createdAt || 0))) {
+    if (item.itemKey) payoutState.set(String(item.itemKey), !item.reversed);
+  }
+  const paidKeys = new Set([...payoutState].filter(([, paid]) => paid).map(([itemKey]) => itemKey));
+  const pendingStatuses = new Set(['submitting', 'pending', 'otp', 'unknown']);
+  const reservedKeys = new Set((payrollItems as any[])
+    .filter(item => pendingStatuses.has(String(item.status)))
+    .flatMap(item => Array.isArray(item.earningKeys) ? item.earningKeys.map(String) : []));
   const lines = buildEarningLedger(orders as any[], staff as any[], adjustments as any[], paidItems as any[])
-    .filter(line => line.createdAt >= from && line.createdAt <= to && !line.paid && line.amount > 0 && line.currency === 'KES');
+    .filter(line => line.createdAt >= from && line.createdAt <= to && !line.paid && !reservedKeys.has(line.earningKey) && line.amount > 0 && line.currency === 'KES');
   const staffById = new Map((staff as any[]).map(member => [member.id, member]));
   const byStaff = new Map<string, any>();
   for (const line of lines) {
     const member: any = staffById.get(line.staffId);
-    const row = byStaff.get(line.staffId) || { staffId: line.staffId, name: line.staffName, role: line.staffRole, phone: member?.phone || '', clients: new Set<string>(), services: 0, commissionKES: 0, assistantFeesKES: 0, totalKES: 0 };
+    const row = byStaff.get(line.staffId) || { staffId: line.staffId, name: line.staffName, role: line.staffRole, phone: member?.phone || '', clients: new Set<string>(), services: 0, commissionKES: 0, assistantFeesKES: 0, salaryKES: 0, totalKES: 0, earningKeys: [] as string[] };
     row.clients.add(String(line.customerId || line.customerName));
     row.services += 1;
+    row.earningKeys.push(line.earningKey);
     if (line.payoutType === 'assistant_fee') row.assistantFeesKES += line.amount; else row.commissionKES += line.amount;
     row.totalKES += line.amount;
     byStaff.set(line.staffId, row);
   }
-  const rows = Array.from(byStaff.values()).map(row => ({ ...row, clients: row.clients.size, commissionKES: Math.round(row.commissionKES), assistantFeesKES: Math.round(row.assistantFeesKES), totalKES: Math.round(row.totalKES) })).sort((a, b) => a.name.localeCompare(b.name));
-  return { lines, rows };
+  const rows = Array.from(byStaff.values()).map(row => ({ ...row, clients: row.clients.size, commissionKES: Math.round(row.commissionKES), assistantFeesKES: Math.round(row.assistantFeesKES), salaryKES: 0, totalKES: Math.round(row.totalKES) }));
+  return { lines, rows, staff: staff as any[], payoutState, reservedKeys };
+}
+
+function addMonthlySalaries(result: Awaited<ReturnType<typeof unpaidPayrollLines>>, salaryMonth: string) {
+  const byStaff = new Map(result.rows.map(row => [row.staffId, row]));
+  for (const member of result.staff) {
+    const role = String(member.role || '');
+    const compensationType = member.compensationType || (role.toLowerCase().includes('reception') ? 'salary' : 'commission');
+    if (compensationType !== 'salary' || member.employmentStatus === 'laid-off') continue;
+    const salaryKES = Math.round(Number(member.monthlySalary || 0));
+    const earningKey = `salary:${member.id}:${salaryMonth}`;
+    if (salaryKES <= 0 || result.payoutState.get(earningKey) || result.reservedKeys.has(earningKey)) continue;
+    const row = byStaff.get(member.id) || {
+      staffId: member.id, name: member.name, role, phone: member.phone || '', clients: 0, services: 0,
+      commissionKES: 0, assistantFeesKES: 0, salaryKES: 0, totalKES: 0, earningKeys: [],
+    };
+    row.salaryKES += salaryKES;
+    row.totalKES += salaryKES;
+    row.earningKeys.push(earningKey);
+    byStaff.set(member.id, row);
+  }
+  return Array.from(byStaff.values()).sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function paystackConfiguration() {
+  const secretKey = process.env.PAYSTACK_SECRET_KEY || '';
+  return { secretKey, ready: /^sk_live_[A-Za-z0-9]+$/.test(secretKey) };
+}
+
+function normalizeKenyanMobile(value: unknown) {
+  return String(value || '').replace(/\s+/g, '').replace(/^\+/, '').replace(/^0/, '254');
+}
+
+function payrollReference(tenantId: string, staffId: string, earningKeys: string[], attempt: number) {
+  const key = [tenantId, staffId, ...earningKeys.slice().sort(), String(attempt)].join(':');
+  return `sgp_${createHash('sha256').update(key).digest('hex').slice(0, 40)}`;
+}
+
+class PaystackTransportError extends Error {}
+
+async function paystackApi(path: string, payload: Record<string, unknown>) {
+  const { secretKey, ready } = paystackConfiguration();
+  if (!ready) throw new Error('Production Paystack is not configured. Add a live PAYSTACK_SECRET_KEY to the backend environment.');
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 20000);
+  let response: Response;
+  try {
+    response = await fetch(`https://api.paystack.co${path}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${secretKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+  } catch {
+    throw new PaystackTransportError('Could not confirm the Paystack request outcome. Check the Paystack dashboard before retrying.');
+  } finally {
+    clearTimeout(timeout);
+  }
+  const result: any = await response.json().catch(() => null);
+  if (!result && (response.ok || response.status >= 500)) throw new PaystackTransportError('Could not confirm the Paystack request outcome. Check the Paystack dashboard before retrying.');
+  if (!response.ok || result?.status !== true) return {
+    ok: false as const,
+    uncertain: response.status >= 500,
+    message: String(result?.message || `Paystack rejected the request (${response.status}).`),
+  };
+  return { ok: true as const, uncertain: false as const, data: result.data };
+}
+
+function verifyPaystackSignature(signature: unknown, rawBody: Buffer | undefined, secretKey: string) {
+  if (typeof signature !== 'string' || !rawBody?.length) return false;
+  const received = Buffer.from(signature, 'hex');
+  const expected = createHmac('sha512', secretKey).update(rawBody).digest();
+  return received.length === expected.length && timingSafeEqual(received, expected);
+}
+
+async function updatePayrollTransfer(tenantId: string, itemId: string, status: string, providerData: any = {}) {
+  await withRequestContext({ accountId: 'paystack-webhook', tenantId, salonName: '', role: 'owner', name: 'Paystack webhook' }, async () => {
+    const [item] = await db.get('payroll_items', [itemId]);
+    if (!item) return;
+    const previousStatus = String(item.status || '');
+    if ((previousStatus === 'success' && status === 'failed') || (previousStatus === 'reversed' && status !== 'reversed')) return;
+    const next = {
+      ...item,
+      status,
+      providerStatus: String(providerData.status || status),
+      providerMessage: String(providerData.message || providerData.gateway_response || providerData.reason || ''),
+      transferCode: String(providerData.transfer_code || item.transferCode || ''),
+      providerUpdatedAt: Date.now(),
+    };
+    await db.update('payroll_items', [{ id: itemId, record: next }]);
+    const referenceRecord = {
+      id: item.reference,
+      tenantId,
+      batchId: item.batchId,
+      payrollItemId: itemId,
+      status,
+      updatedAt: Date.now(),
+    };
+    await db.upsert('payroll_transfer_refs', [referenceRecord]);
+    if (status === 'success' || status === 'reversed') {
+      await db.upsert('payout_items', (item.earningItems || []).map((earning: any) => ({
+        id: `paystack-payout-${createHash('sha256').update(`${tenantId}:${earning.itemKey}`).digest('hex')}`,
+        itemKey: earning.itemKey,
+        batchId: item.batchId,
+        staffId: item.staffId,
+        currency: 'KES',
+        commission: earning.amountKES,
+        payoutType: earning.payoutType,
+        reversed: status === 'reversed',
+        createdAt: Date.now(),
+      })));
+    }
+    const { items } = await db.listAllTenant('payroll_items', tenantId, { limit: 10000 });
+    const batchItems = (items as any[]).filter(payment => payment.batchId === item.batchId);
+    const pending = batchItems.some(payment => ['submitting', 'pending', 'otp', 'unknown'].includes(String(payment.status)));
+    const successCount = batchItems.filter(payment => payment.status === 'success').length;
+    const failedCount = batchItems.filter(payment => payment.status === 'failed' || payment.status === 'reversed').length;
+    const batchStatus = pending ? (successCount ? 'partial' : 'pending') : successCount === batchItems.length ? 'success' : successCount ? 'partial' : 'failed';
+    const [batch] = await db.get('payroll_batches', [item.batchId]);
+    if (batch) await db.update('payroll_batches', [{ id: item.batchId, record: { ...batch, status: batchStatus, sentCount: successCount, failedCount, updatedAt: Date.now() } }]);
+    await audit(`transfer_${status}`, 'payroll_item', { id: itemId, staffId: item.staffId, amountKES: item.amountKES, reference: item.reference }, 'Paystack');
+  });
 }
 
 function summarizeEarnings(entries: any[], staff: any[] = []) {
@@ -1311,69 +1458,232 @@ export const handler = router({
       return { ...member, compensationType: member.compensationType || (isReceptionist ? 'salary' : 'commission'), monthlySalary: Number(member.monthlySalary || 0), commissionPct: isReceptionist ? 0 : Number(member.commissionPct ?? 40) };
     }) });
   }],
+  'GET /api/payroll/provider-status': [async () => {
+    if (currentContext()?.role !== 'owner') return error('Only the owner can view payroll provider status', 403);
+    const config = paystackConfiguration();
+    return json({ provider: 'Paystack', ready: config.ready, environment: config.ready ? 'production' : 'not_configured' });
+  }],
+  'GET /api/payroll/batches': [async () => {
+    const context = currentContext();
+    if (context?.role !== 'owner') return error('Only the owner can view payroll transfers', 403);
+    const [{ items: batches }, { items: transfers }] = await Promise.all([
+      db.listAllTenant('payroll_batches', context.tenantId, { limit: 100 }),
+      db.listAllTenant('payroll_items', context.tenantId, { limit: 1000 }),
+    ]);
+    const recent = (batches as any[])
+      .filter(batch => batch.provider === 'paystack')
+      .sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0))
+      .slice(0, 10);
+    return json({ items: recent.map(batch => ({
+      id: batch.id,
+      salaryMonth: batch.salaryMonth,
+      status: batch.status,
+      totalKES: batch.totalKES,
+      employeeCount: batch.employeeCount,
+      sentCount: batch.sentCount || 0,
+      failedCount: batch.failedCount || 0,
+      createdAt: batch.createdAt,
+      transfers: (transfers as any[]).filter(payment => payment.batchId === batch.id).map(payment => ({
+        staffId: payment.staffId,
+        staffName: payment.staffName,
+        amountKES: payment.amountKES,
+        status: payment.status,
+        reference: payment.reference,
+        providerMessage: payment.providerMessage || '',
+      })),
+    })) });
+  }],
   'GET /api/payroll/commissions': [async ({ query }) => {
     const context = currentContext();
     if (context?.role !== 'owner') return error('Only the owner can view payroll', 403);
+    const monthWindow = payrollMonthWindow(query.salaryMonth);
+    if (!monthWindow) return error('Choose a valid current or past salary month.', 400);
     const { from, to } = payrollWindow(query);
-    const { rows } = await unpaidPayrollLines(context.tenantId, from, to);
+    const result = await unpaidPayrollLines(context.tenantId, from, to);
+    const rows = addMonthlySalaries(result, monthWindow.salaryMonth).map(({ earningKeys: _earningKeys, ...row }) => row);
     return json({ rows, totalKES: rows.reduce((sum, row) => sum + row.totalKES, 0) });
   }],
   'POST /api/payouts': [async ({ body }) => {
     const context = currentContext();
     if (context?.role !== 'owner') return error('Only the owner can record payouts', 403);
     const now = Date.now();
+    const monthWindow = payrollMonthWindow(body?.salaryMonth);
+    if (!monthWindow) return error('Choose a valid current or past salary month.', 400);
     const window = payrollWindow(body);
     const from = window.from;
     const range = body?.from || body?.to ? 'custom' : 'all';
-    const { lines: unpaid } = await unpaidPayrollLines(context.tenantId, from, window.to);
-    const lines = unpaid
-      .map(line => ({ ...line, itemKey: line.earningKey, revenue: line.serviceRevenue, commission: line.amount, assistantFee: line.payoutType === 'assistant_fee' ? line.amount : 0, branchId: line.branchId || context.branchId || null, createdAt: now }));
-    if (!lines.length) return error('There are no unpaid commissions in this period.', 409);
-    const totalKES = lines.filter(line => line.currency === 'KES').reduce((sum, line) => sum + line.commission, 0);
-    const [batchId] = await db.add('payout_batches', [{ range, from, to: window.to, totalKES, employeeCount: new Set(lines.map(line => line.staffId)).size, itemCount: lines.length, status: 'recorded', createdAt: now }]);
+    const result = await unpaidPayrollLines(context.tenantId, from, window.to);
+    const rows = addMonthlySalaries(result, monthWindow.salaryMonth);
+    const lines: any[] = result.lines.map(line => ({
+      ...line, itemKey: line.earningKey, revenue: line.serviceRevenue, commission: line.amount,
+      assistantFee: line.payoutType === 'assistant_fee' ? line.amount : 0,
+      branchId: line.branchId || context.branchId || null, createdAt: now,
+    }));
+    for (const row of rows) {
+      for (const earningKey of row.earningKeys.filter((key: string) => key.startsWith('salary:'))) {
+        lines.push({
+          itemKey: earningKey, earningKey, staffId: row.staffId, staffName: row.name, staffRole: row.role,
+          payoutType: 'salary', currency: 'KES', amount: row.salaryKES, commission: row.salaryKES,
+          assistantFee: 0, revenue: 0, branchId: context.branchId || null, createdAt: now,
+        });
+      }
+    }
+    if (!lines.length) return error('There are no unpaid commissions or salary for this period.', 409);
+    const totalKES = lines.reduce((sum, line) => sum + Number(line.commission || line.amount || 0), 0);
+    const employeeCount = new Set(lines.map(line => line.staffId)).size;
+    const [batchId] = await db.add('payout_batches', [{ range, from, to: window.to, salaryMonth: monthWindow.salaryMonth, totalKES, employeeCount, itemCount: lines.length, status: 'recorded', createdAt: now }]);
     await db.add('payout_items', lines.map(line => ({ ...line, batchId })));
-    await audit('recorded', 'payout_batch', { id: batchId, range, totalKES, employeeCount: new Set(lines.map(line => line.staffId)).size, itemCount: lines.length }, 'owner');
-    return json({ id: batchId, range, totalKES, employeeCount: new Set(lines.map(line => line.staffId)).size, itemCount: lines.length, status: 'recorded', message: 'Commission and assistant-fee payouts recorded internally. No money was sent.' });
+    await audit('recorded', 'payout_batch', { id: batchId, range, salaryMonth: monthWindow.salaryMonth, totalKES, employeeCount, itemCount: lines.length }, 'owner');
+    return json({ id: batchId, range, totalKES, employeeCount, itemCount: lines.length, status: 'recorded', message: 'Commission and salary payouts recorded internally. No money was sent.' });
   }],
   'POST /api/payroll/send': [async ({ body }) => {
     const context = currentContext();
     if (context?.role !== 'owner') return error('Only the owner can send payroll', 403);
+    if (!paystackConfiguration().ready) return error('Production Paystack payroll is not configured. Add a live PAYSTACK_SECRET_KEY to the backend environment.', 503);
+    const monthWindow = payrollMonthWindow(body?.salaryMonth);
+    if (!monthWindow) return error('Choose a valid current or past salary month.', 400);
     const window = payrollWindow(body);
-    const { rows } = await unpaidPayrollLines(context.tenantId, window.from, window.to);
-    const recipients = rows.map(row => ({ staffId: row.staffId, amountKES: row.totalKES, phone: row.phone })).filter(row => row.amountKES > 0);
-    if (!recipients.length) return error('There are no unpaid commissions in this period.', 409);
-    const initiator = process.env.MPESA_B2C_INITIATOR_NAME;
-    const securityCredential = process.env.MPESA_B2C_SECURITY_CREDENTIAL;
-    const shortcode = process.env.MPESA_B2C_SHORTCODE;
-    const timeoutUrl = process.env.MPESA_B2C_QUEUE_TIMEOUT_URL;
-    const resultUrl = process.env.MPESA_B2C_RESULT_URL;
-    if (!initiator || !securityCredential || !shortcode || !timeoutUrl || !resultUrl) return error('M-Pesa B2C payroll is not configured. Add the B2C credentials and callback URLs to the backend environment.', 503);
-    const cleanRecipients = recipients.map((recipient: any) => ({ staffId: String(recipient.staffId || ''), amountKES: Math.round(Number(recipient.amountKES) || 0), phone: String(recipient.phone || '').replace(/\s+/g, '').replace(/^\+/, '').replace(/^0/, '254') })).filter((recipient: any) => recipient.staffId && recipient.amountKES > 0 && /^254[71]\d{8}$/.test(recipient.phone));
-    if (cleanRecipients.length !== recipients.length) return error('Every payroll recipient needs a valid Kenyan phone number and amount.', 400);
-    const now = Date.now();
-    const [batchId] = await db.add('payroll_batches', [{ status: 'submitting', totalKES: cleanRecipients.reduce((sum: number, recipient: any) => sum + recipient.amountKES, 0), employeeCount: cleanRecipients.length, createdAt: now }]);
-    const baseUrl = process.env.MPESA_ENVIRONMENT === 'production' ? 'https://api.safaricom.co.ke' : 'https://sandbox.safaricom.co.ke';
-    try {
-      const tokenResponse = await fetch(`${baseUrl}/oauth/v1/generate?grant_type=client_credentials`, { headers: { Authorization: `Basic ${Buffer.from(`${process.env.MPESA_CONSUMER_KEY}:${process.env.MPESA_CONSUMER_SECRET}`).toString('base64')}` } });
-      const tokenBody: any = await tokenResponse.json();
-      if (!tokenResponse.ok || !tokenBody.access_token) throw new Error(tokenBody.errorMessage || 'Could not authenticate with Safaricom');
-      const results: any[] = [];
-      for (const recipient of cleanRecipients) {
-        const response = await fetch(`${baseUrl}/mpesa/b2c/v1/paymentrequest`, { method: 'POST', headers: { Authorization: `Bearer ${tokenBody.access_token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ InitiatorName: initiator, SecurityCredential: securityCredential, CommandID: process.env.MPESA_B2C_COMMAND_ID || 'BusinessPayment', Amount: recipient.amountKES, PartyA: shortcode, PartyB: recipient.phone, Remarks: `SafiGroom payroll ${batchId}`, QueueTimeOutURL: timeoutUrl, ResultURL: resultUrl, Occasion: 'Payroll' }) });
-        const bodyResult: any = await response.json();
-        const [itemId] = await db.add('payroll_items', [{ batchId, ...recipient, status: response.ok ? 'submitted' : 'failed', conversationId: bodyResult.ConversationID || null, response: bodyResult, createdAt: now }]);
-        results.push({ id: itemId, staffId: recipient.staffId, status: response.ok ? 'submitted' : 'failed', response: bodyResult });
+    const payroll = await unpaidPayrollLines(context.tenantId, window.from, window.to);
+    const rows = addMonthlySalaries(payroll, monthWindow.salaryMonth);
+    if (!rows.length) return error('There are no unpaid commissions or salary in this period.', 409);
+    const invalidPhones = rows.filter(row => !/^254[71]\d{8}$/.test(normalizeKenyanMobile(row.phone)));
+    if (invalidPhones.length) return error(`Add a valid Kenyan M-Pesa phone number for: ${invalidPhones.map(row => row.name).join(', ')}.`, 400);
+    const lineByKey = new Map(payroll.lines.map(line => [line.earningKey, line]));
+    const plans = rows.map(row => ({
+      staffId: row.staffId,
+      staffName: row.name,
+      phone: normalizeKenyanMobile(row.phone),
+      amountKES: Math.round(row.totalKES),
+      earningItems: row.earningKeys.map((itemKey: string) => {
+        if (itemKey.startsWith('salary:')) return { itemKey, amountKES: row.salaryKES, payoutType: 'salary' };
+        const line = lineByKey.get(itemKey);
+        if (!line) throw new Error('A payroll earning changed while the payment was being prepared. Refresh payroll and try again.');
+        return { itemKey, amountKES: Math.round(line.amount), payoutType: line.payoutType };
+      }),
+    })).filter(row => row.amountKES > 0);
+    const { items: previousTransfers } = await db.listAllTenant('payroll_items', context.tenantId, { limit: 10000 });
+    const planned: any[] = [];
+    const existingResults: any[] = [];
+    for (const plan of plans) {
+      const sortedKeys = plan.earningItems.map(item => item.itemKey).sort();
+      const payrollKey = createHash('sha256').update(`${context.tenantId}:${plan.staffId}:${sortedKeys.join(':')}`).digest('hex');
+      const attempts = (previousTransfers as any[]).filter(item => item.payrollKey === payrollKey).sort((a, b) => Number(a.attempt || 0) - Number(b.attempt || 0));
+      const previous = attempts[attempts.length - 1];
+      if (previous && !['failed', 'reversed'].includes(String(previous.status))) {
+        existingResults.push(previous);
+        continue;
       }
-      const failedCount = results.filter(result => result.status === 'failed').length;
-      await db.update('payroll_batches', [{ id: batchId, record: { id: batchId, status: failedCount ? 'partial' : 'submitted', totalKES: cleanRecipients.reduce((sum: number, recipient: any) => sum + recipient.amountKES, 0), employeeCount: cleanRecipients.length, sentCount: results.length - failedCount, failedCount, createdAt: now } }]);
-      await audit('submitted', 'payroll_batch', { id: batchId, employeeCount: cleanRecipients.length, failedCount }, 'owner');
-      return json({ id: batchId, totalKES: cleanRecipients.reduce((sum: number, recipient: any) => sum + recipient.amountKES, 0), employeeCount: cleanRecipients.length, sentCount: results.length - failedCount, failedCount, status: failedCount ? 'failed' : 'submitted' });
-    } catch (cause) {
-      await db.update('payroll_batches', [{ id: batchId, record: { id: batchId, status: 'failed', totalKES: cleanRecipients.reduce((sum: number, recipient: any) => sum + recipient.amountKES, 0), employeeCount: cleanRecipients.length, failedCount: cleanRecipients.length, createdAt: now, error: cause instanceof Error ? cause.message : 'Payroll failed' } }]);
-      return error(cause instanceof Error ? cause.message : 'Payroll transfer failed', 502);
+      const attempt = previous ? Number(previous.attempt || 0) + 1 : 0;
+      planned.push({ ...plan, payrollKey, attempt, reference: payrollReference(context.tenantId, plan.staffId, sortedKeys, attempt) });
     }
+    const now = Date.now();
+    let batchId = '';
+    if (planned.length) {
+      batchId = randomUUID();
+      const totalKES = planned.reduce((sum, payment) => sum + payment.amountKES, 0);
+      await db.add('payroll_batches', [{ id: batchId, provider: 'paystack', salaryMonth: monthWindow.salaryMonth, totalKES, employeeCount: planned.length, status: 'submitting', createdAt: now }]);
+      for (const payment of planned) {
+        payment.id = randomUUID();
+        payment.batchId = batchId;
+        payment.provider = 'paystack';
+        payment.status = 'submitting';
+        payment.createdAt = now;
+        await db.add('payroll_items', [payment]);
+        await db.add('payroll_transfer_refs', [{ id: payment.reference, tenantRef: context.tenantId, batchId, payrollItemId: payment.id, status: 'submitting', createdAt: now }]);
+      }
+    }
+    const processPayment = async (payment: any) => {
+      let nextStatus = 'failed';
+      let providerData: any = {};
+      try {
+        const [savedRecipient] = await db.get('paystack_recipients', [payment.staffId]);
+        let recipientCode = savedRecipient?.phone === payment.phone ? String(savedRecipient.recipientCode || '') : '';
+        if (!recipientCode) {
+          const created = await paystackApi('/transferrecipient', {
+            type: 'mobile_money', name: payment.staffName, account_number: payment.phone, bank_code: 'MPESA', currency: 'KES',
+          });
+          if (!created.ok) throw new Error(created.message);
+          recipientCode = String(created.data?.recipient_code || '');
+          if (!recipientCode) throw new Error('Paystack did not return a mobile-money recipient code.');
+          const record = { id: payment.staffId, phone: payment.phone, recipientCode };
+          if (savedRecipient) await db.update('paystack_recipients', [{ id: payment.staffId, record }]);
+          else await db.add('paystack_recipients', [record]);
+        }
+        if (!Number.isSafeInteger(payment.amountKES) || payment.amountKES <= 0 || payment.amountKES > Number.MAX_SAFE_INTEGER / 100) throw new Error(`Invalid payroll amount for ${payment.staffName}.`);
+        const transferred = await paystackApi('/transfer', {
+          source: 'balance',
+          amount: payment.amountKES * 100,
+          recipient: recipientCode,
+          reason: `SafiGroom payroll ${monthWindow.salaryMonth}`,
+          reference: payment.reference,
+        });
+        if (!transferred.ok) {
+          providerData = { message: transferred.message };
+          nextStatus = transferred.uncertain ? 'unknown' : 'failed';
+        } else {
+          providerData = transferred.data || {};
+          const providerStatus = String(providerData.status || 'pending').toLowerCase();
+          nextStatus = ['success', 'failed', 'reversed'].includes(providerStatus)
+            ? providerStatus
+            : providerStatus === 'otp' ? 'otp' : 'pending';
+        }
+      } catch (cause) {
+        providerData = { message: cause instanceof Error ? cause.message : 'Paystack transfer failed.' };
+        nextStatus = cause instanceof PaystackTransportError ? 'unknown' : 'failed';
+      }
+      await updatePayrollTransfer(context.tenantId, payment.id, nextStatus, providerData);
+      return { staffId: payment.staffId, amountKES: payment.amountKES, status: nextStatus, reference: payment.reference };
+    };
+    const outcomes: any[] = [];
+    for (let offset = 0; offset < planned.length; offset += 5) {
+      outcomes.push(...await Promise.all(planned.slice(offset, offset + 5).map(processPayment)));
+    }
+    if (batchId) {
+      const { items: batchTransfers } = await db.listAllTenant('payroll_items', context.tenantId, { limit: 10000 });
+      const currentBatchTransfers = (batchTransfers as any[]).filter(payment => payment.batchId === batchId);
+      const pendingCount = currentBatchTransfers.filter(payment => ['submitting', 'pending', 'otp', 'unknown'].includes(String(payment.status))).length;
+      const successCount = currentBatchTransfers.filter(payment => payment.status === 'success').length;
+      const failedCount = currentBatchTransfers.filter(payment => payment.status === 'failed' || payment.status === 'reversed').length;
+      const [batch] = await db.get('payroll_batches', [batchId]);
+      if (batch) {
+        const status = pendingCount ? (successCount || failedCount ? 'partial' : 'pending') : successCount === currentBatchTransfers.length ? 'success' : successCount ? 'partial' : 'failed';
+        await db.update('payroll_batches', [{ id: batchId, record: { ...batch, status, sentCount: successCount, failedCount, updatedAt: Date.now() } }]);
+      }
+    }
+    const allOutcomes = [
+      ...existingResults.map(item => ({ staffId: item.staffId, amountKES: item.amountKES, status: item.status, reference: item.reference })),
+      ...outcomes,
+    ];
+    const sentCount = allOutcomes.filter(payment => ['pending', 'success', 'otp', 'unknown'].includes(String(payment.status))).length;
+    const failedCount = allOutcomes.filter(payment => payment.status === 'failed' || payment.status === 'reversed').length;
+    const totalKES = allOutcomes.reduce((sum, payment) => sum + Number(payment.amountKES || 0), 0);
+    const allSucceeded = allOutcomes.length > 0 && allOutcomes.every(payment => payment.status === 'success');
+    const status = allSucceeded ? 'success' : sentCount ? (failedCount ? 'partial' : 'pending') : 'failed';
+    await audit('submitted', 'payroll_batch', {
+      id: batchId || existingResults[0]?.batchId, salaryMonth: monthWindow.salaryMonth,
+      employeeCount: allOutcomes.length, sentCount, failedCount, totalKES,
+    }, context.name);
+    return json({
+      id: batchId || existingResults[0]?.batchId || '', totalKES,
+      employeeCount: allOutcomes.length, sentCount, failedCount, status, transfers: allOutcomes,
+    });
   }],
-  'POST /api/payroll/result': [async ({ body }) => { await db.add('payroll_callbacks', [{ type: 'result', body, createdAt: Date.now() }]); return json({ ResultCode: 0, ResultDesc: 'Accepted' }); }],
+  'POST /api/paystack/webhook': [async ({ body, headers, rawBody }) => {
+    const { secretKey, ready } = paystackConfiguration();
+    if (!ready) return error('Paystack webhook is not configured.', 503);
+    const header = headers?.['x-paystack-signature'];
+    const signature = Array.isArray(header) ? header[0] : header;
+    if (!verifyPaystackSignature(signature, rawBody, secretKey)) return error('Invalid Paystack webhook signature.', 401);
+    const event = String(body?.event || '');
+    const reference = String(body?.data?.reference || '');
+    const status = ({ 'transfer.success': 'success', 'transfer.failed': 'failed', 'transfer.reversed': 'reversed' } as Record<string, string>)[event];
+    if (!status || !reference) return json({ received: true });
+    const [referenceRecord] = await db.get('payroll_transfer_refs', [reference]);
+    const tenantId = referenceRecord?.tenantRef || referenceRecord?.tenantId;
+    if (!tenantId || !referenceRecord?.payrollItemId) return json({ received: true });
+    await updatePayrollTransfer(String(tenantId), String(referenceRecord.payrollItemId), status, body.data);
+    return json({ received: true });
+  }],  'POST /api/payroll/result': [async ({ body }) => { await db.add('payroll_callbacks', [{ type: 'result', body, createdAt: Date.now() }]); return json({ ResultCode: 0, ResultDesc: 'Accepted' }); }],
   'POST /api/payroll/timeout': [async ({ body }) => { await db.add('payroll_callbacks', [{ type: 'timeout', body, createdAt: Date.now() }]); return json({ ResultCode: 0, ResultDesc: 'Accepted' }); }],
 
   'GET /api/dashboard': [async ({ query }) => {

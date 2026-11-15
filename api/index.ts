@@ -13,7 +13,10 @@ const publicRoutes = new Set([
   '/api/mpesa/callback',
   '/api/payroll/timeout',
   '/api/payroll/result',
+  '/api/paystack/webhook',
 ]);
+
+export const config = { api: { bodyParser: false } };
 
 function normalizeRole(role: unknown) {
   const value = String(role || '').trim().toLowerCase();
@@ -72,6 +75,27 @@ export default async function apiRoute(request: any, response: any) {
     query[key] = Array.isArray(value) ? value.map(String).join(',') : String(value ?? '');
   }
 
+  let rawBody = Buffer.alloc(0);
+  if (method !== 'GET' && method !== 'HEAD') {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    for await (const chunk of request) {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      size += buffer.length;
+      if (size > 4 * 1024 * 1024) return response.status(413).json({ error: 'Request body is too large.' });
+      chunks.push(buffer);
+    }
+    rawBody = Buffer.concat(chunks);
+  }
+  let requestBody: any = {};
+  if (rawBody.length) {
+    try {
+      requestBody = JSON.parse(rawBody.toString('utf8'));
+    } catch {
+      return response.status(400).json({ error: 'Request body must be valid JSON.' });
+    }
+  }
+
   for (const [definition, [routeHandler]] of Object.entries(apiRouter.routes)) {
     const [routeMethod, routePath] = definition.split(' ');
     if (routeMethod !== method) continue;
@@ -88,16 +112,7 @@ export default async function apiRoute(request: any, response: any) {
       if (!publicRoutes.has(pathname) && !context) return response.status(401).json({ error: 'Please log in.' });
       if (context?.mustChangePin && pathname !== '/api/auth/change-pin') return response.status(403).json({ error: 'Change your staff PIN before using the portal.', code: 'PIN_CHANGE_REQUIRED' });
 
-      let body = request.body ?? {};
-      if (typeof body === 'string') {
-        try {
-          body = JSON.parse(body);
-        } catch {
-          return response.status(400).json({ error: 'Request body must be valid JSON.' });
-        }
-      }
-
-      const result = await withRequestContext(context, () => routeHandler({ body, query, params }));
+      const result = await withRequestContext(context, () => routeHandler({ body: requestBody, query, params, headers: request.headers, rawBody }));
       return response.status(result?.status || 200).json(result?.body ?? result);
     } catch (cause) {
       console.error(cause);

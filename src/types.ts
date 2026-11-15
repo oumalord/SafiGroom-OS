@@ -181,7 +181,20 @@ export interface PayrollRow {
   services: number;
   commissionKES: number;
   assistantFeesKES: number;
+  salaryKES: number;
   totalKES: number;
+}
+
+export interface PayrollTransferBatch {
+  id: string;
+  salaryMonth: string;
+  status: string;
+  totalKES: number;
+  employeeCount: number;
+  sentCount: number;
+  failedCount: number;
+  createdAt: number;
+  transfers: { staffId: string; staffName: string; amountKES: number; status: string; reference: string; providerMessage: string }[];
 }
 
 export interface PayoutBatch {

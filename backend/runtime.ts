@@ -3,7 +3,7 @@ import { neon } from '@neondatabase/serverless';
 import { randomUUID } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 
-type RouteHandler = (context: { body: any; query: Record<string, string>; params: Record<string, string> }) => Promise<any>;
+type RouteHandler = (context: { body: any; query: Record<string, string>; params: Record<string, string>; headers?: Record<string, string | string[] | undefined>; rawBody?: Buffer }) => Promise<any>;
 
 type StoredRecord = { id: string; collection: string; record: Record<string, any> };
 type RequestContext = { accountId: string; tenantId: string; salonName: string; branchId?: string; role: string; name: string };
@@ -14,7 +14,7 @@ if (!connectionString) throw new Error('DATABASE_URL is required to start the ba
 const sql = neon(connectionString);
 let initialized: Promise<void> | undefined;
 const requestContext = new AsyncLocalStorage<RequestContext | null>();
-const globalCollections = new Set(['salons', 'branches', 'accounts', 'sessions']);
+const globalCollections = new Set(['salons', 'branches', 'accounts', 'sessions', 'payroll_transfer_refs']);
 
 export function withRequestContext<T>(context: RequestContext | null, callback: () => Promise<T>) {
   return requestContext.run(context, callback);
@@ -65,6 +65,21 @@ export const db = {
       const stampedRecord = globalCollections.has(collection) ? { ...record, id } : { ...record, id, tenantId, salonName: record.salonName || context?.salonName || '', branchId: record.branchId || context?.branchId || null };
       ids.push(id);
       await sql`INSERT INTO app_records (id, collection, tenant_id, record) VALUES (${id}, ${collection}, ${tenantId}, ${JSON.stringify(stampedRecord)}::jsonb)`;
+    }
+    return ids;
+  },
+  async upsert(collection: string, records: Record<string, any>[]) {
+    await init();
+    const ids: string[] = [];
+    for (const record of records) {
+      const id = String(record.id || randomUUID());
+      const context = currentContext();
+      const tenantId = globalCollections.has(collection) ? null : record.tenantId || context?.tenantId || null;
+      const stampedRecord = globalCollections.has(collection) ? { ...record, id } : { ...record, id, tenantId, salonName: record.salonName || context?.salonName || '', branchId: record.branchId || context?.branchId || null };
+      await sql`INSERT INTO app_records (id, collection, tenant_id, record) VALUES (${id}, ${collection}, ${tenantId}, ${JSON.stringify(stampedRecord)}::jsonb)
+        ON CONFLICT (id) DO UPDATE SET record = EXCLUDED.record
+        WHERE app_records.collection = EXCLUDED.collection AND app_records.tenant_id IS NOT DISTINCT FROM EXCLUDED.tenant_id`;
+      ids.push(id);
     }
     return ids;
   },

@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
-import { Download, Plus, Receipt } from 'lucide-react';
+import { Download, Plus, Receipt, Send } from 'lucide-react';
 import { Card, Button, Badge, Modal, Field, Input, Select, EmptyState, LoadingState, StatCard, toast } from '../components/ui';
 import { DashboardApi, ExpensesApi, PayrollApi, PayoutsApi, downloadCSV, fmtMoney } from '../lib/api';
 import Earnings from './Earnings';
-import type { DashboardData, Expense, PayoutBatch, PayrollRow } from '../types';
+import type { DashboardData, Expense, PayoutBatch, PayrollRow, PayrollTransferBatch } from '../types';
 
 type Range = 'today' | 'week' | 'month' | 'all';
+const currentSalaryMonth = () => new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString().slice(0, 7);
 
 function Finance() {
   const [range, setRange] = useState<Range>('month');
@@ -15,6 +16,9 @@ function Finance() {
   const [payrollRows, setPayrollRows] = useState<PayrollRow[]>([]);
   const [payFrom, setPayFrom] = useState('');
   const [payTo, setPayTo] = useState('');
+  const [salaryMonth, setSalaryMonth] = useState(currentSalaryMonth);
+  const [paystackReady, setPaystackReady] = useState(false);
+  const [payrollBatches, setPayrollBatches] = useState<PayrollTransferBatch[]>([]);
   const [payrollSending, setPayrollSending] = useState(false);
   const [paying, setPaying] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -27,9 +31,22 @@ function Finance() {
   };
   useEffect(load, [range]);
 
-  const period = { from: payFrom || undefined, to: payTo || undefined };
-  const loadPayroll = () => { PayrollApi.commissions({ from: payFrom, to: payTo }).then(result => setPayrollRows(result.rows)).catch(() => setPayrollRows([])); };
-  useEffect(loadPayroll, [payFrom, payTo]);
+  const period = { from: payFrom || undefined, to: payTo || undefined, salaryMonth };
+  const loadPayroll = async () => {
+    try {
+      const [payroll, provider, batches] = await Promise.all([
+        PayrollApi.commissions(period),
+        PayrollApi.providerStatus(),
+        PayrollApi.batches(),
+      ]);
+      setPayrollRows(payroll.rows);
+      setPaystackReady(provider.ready);
+      setPayrollBatches(batches);
+    } catch (cause) {
+      toast(cause instanceof Error ? cause.message : 'Could not load payroll.', 'error');
+    }
+  };
+  useEffect(() => { void loadPayroll(); }, [payFrom, payTo, salaryMonth]);
   const payrollTotal = payrollRows.reduce((sum, row) => sum + row.totalKES, 0);
 
   const addExpense = async () => {
@@ -42,14 +59,14 @@ function Finance() {
   };
 
   const recordPayout = async () => {
-    if (!payrollRows.length) { toast('There are no unpaid commissions in this period.', 'error'); return; }
-    if (!window.confirm(`Mark ${fmtMoney(payrollTotal, 'KES')} as paid for ${payrollRows.length} staff? Their earnings will restart from zero.`)) return;
+    if (!payrollRows.length) { toast('There are no unpaid commissions or salary in this period.', 'error'); return; }
+    if (!window.confirm(`Record ${fmtMoney(payrollTotal, 'KES')} as paid for ${payrollRows.length} staff? This records an external/manual payment; it does not send money.`)) return;
     setPaying(true);
     try {
       const { data } = await PayoutsApi.record(period);
-      toast(`${data.employeeCount} staff marked paid: ${fmtMoney(data.totalKES, 'KES')}. Earnings restart from zero.`, 'success');
+      toast(`${data.employeeCount} staff payment recorded: ${fmtMoney(data.totalKES, 'KES')}.`, 'success');
       load();
-      loadPayroll();
+      void loadPayroll();
     } catch (cause: any) {
       toast(cause?.message || 'Could not record the payout.', 'error');
     } finally {
@@ -58,13 +75,15 @@ function Finance() {
   };
 
   const sendPayroll = async () => {
-    if (!payrollRows.length) { toast('There are no unpaid commissions in this period.', 'error'); return; }
-    if (payrollRows.some(row => !/^(?:\+?254|0)[17]\d{8}$/.test((row.phone || '').replace(/\s+/g, '')))) { toast('Every staff member being paid needs a valid Kenyan phone number.', 'error'); return; }
-    if (!window.confirm(`Send ${fmtMoney(payrollTotal, 'KES')} to ${payrollRows.length} staff via M-Pesa now?`)) return;
+    if (!paystackReady) { toast('Configure a live Paystack secret key on the backend before sending payroll.', 'error'); return; }
+    if (!payrollRows.length) { toast('There are no unpaid commissions or salary in this period.', 'error'); return; }
+    if (payrollRows.some(row => !/^(?:\+?254|0)[17]\d{8}$/.test((row.phone || '').replace(/\s+/g, '')))) { toast('Every staff member being paid needs a valid Kenyan M-Pesa number.', 'error'); return; }
+    if (!window.confirm(`Send ${fmtMoney(payrollTotal, 'KES')} to ${payrollRows.length} staff through Paystack to their registered M-Pesa numbers?`)) return;
     setPayrollSending(true);
     try {
       const { data } = await PayrollApi.send(period);
-      toast(`Payroll submitted: ${data.sentCount}/${data.employeeCount} transfers accepted by M-Pesa. Click Mark all paid once done.`, 'success');
+      toast(`Paystack transfers: ${data.sentCount} pending/accepted, ${data.failedCount} failed. Successful payments are marked paid automatically when Paystack confirms them.`, data.failedCount ? 'info' : 'success');
+      void loadPayroll();
     } catch (cause: any) {
       toast(cause?.message || 'Payroll transfer failed.', 'error');
     } finally {
@@ -78,8 +97,8 @@ function Finance() {
       ['Period', `${payFrom || 'start'} to ${payTo || 'today'}`],
       ['Generated', new Date().toLocaleString()],
       [],
-      ['Staff', 'Role', 'Phone', 'Clients', 'Commission (KES)', 'Assistant fees (KES)', 'Total (KES)'],
-      ...payrollRows.map(row => [row.name, row.role, row.phone || '', row.clients, row.commissionKES, row.assistantFeesKES, row.totalKES]),
+      ['Staff', 'Role', 'Phone', 'Clients', 'Commission (KES)', 'Assistant fees (KES)', 'Salary (KES)', 'Total (KES)'],
+      ...payrollRows.map(row => [row.name, row.role, row.phone || '', row.clients, row.commissionKES, row.assistantFeesKES, row.salaryKES, row.totalKES]),
       [],
       ['Total (KES)', payrollTotal],
     ];
@@ -153,25 +172,45 @@ function Finance() {
 
       <Card className="p-6">
         <div className="flex flex-col gap-3 mb-4">
-          <div><h2 className="font-semibold">Staff Payroll</h2><p className="text-xs text-[#6E6E73]">Commissions earned by staff only (receptionists are excluded). Pay any day or any period, then mark all paid to restart staff earnings from zero.</p></div>
+          <div><h2 className="font-semibold">Staff Payroll</h2><p className="text-xs text-[#6E6E73]">Unpaid KES commissions and assistant fees for the selected date range, plus each configured full monthly salary once for the selected month.</p></div>
           <div className="flex flex-wrap items-end gap-2">
             <Field label="From" htmlFor="pay-from"><Input id="pay-from" type="date" value={payFrom} max={payTo || undefined} onChange={e => setPayFrom(e.target.value)} /></Field>
             <Field label="To" htmlFor="pay-to"><Input id="pay-to" type="date" value={payTo} min={payFrom || undefined} onChange={e => setPayTo(e.target.value)} /></Field>
+            <Field label="Salary month" htmlFor="salary-month"><Input id="salary-month" type="month" max={currentSalaryMonth()} value={salaryMonth} onChange={e => setSalaryMonth(e.target.value)} /></Field>
             <Button variant="secondary" onClick={downloadPayroll} disabled={!payrollRows.length}><Download size={16} aria-hidden="true" />CSV</Button>
-            <Button onClick={sendPayroll} disabled={payrollSending || !payrollRows.length}>{payrollSending ? 'Sending…' : 'Send payroll'}</Button>
+            <Button onClick={sendPayroll} disabled={payrollSending || !paystackReady || !payrollRows.length}>{payrollSending ? 'Sending…' : <><Send size={15} aria-hidden="true" />Send with Paystack</>}</Button>
             <Button variant="secondary" onClick={recordPayout} disabled={paying || !payrollRows.length}>{paying ? 'Marking…' : 'Mark all paid'}</Button>
           </div>
         </div>
-        {payrollRows.length === 0 ? <p className="text-sm text-[#6E6E73]">No unpaid commissions{payFrom || payTo ? ' in this period' : ''}.</p> : (
+        {!paystackReady && <p className="mb-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">Paystack live transfers are not configured. Add <code>PAYSTACK_SECRET_KEY</code> as a backend secret and set your Paystack webhook URL to <code>/api/paystack/webhook</code>.</p>}
+        {payrollRows.length === 0 ? <p className="text-sm text-[#6E6E73]">No unpaid commissions or salary{payFrom || payTo ? ' in this period' : ''}.</p> : (
           <div className="space-y-2">
-            {payrollRows.map(row => <div key={row.staffId} className="grid grid-cols-[1fr_auto] items-center gap-3 border-b border-black/5 pb-2"><div><p className="text-sm font-medium">{row.name}</p><p className="text-xs text-[#6E6E73]">{row.role} · {row.phone || 'No phone number'} · {row.clients} client{row.clients === 1 ? '' : 's'} · commission {fmtMoney(row.commissionKES, 'KES')}{row.assistantFeesKES > 0 ? ` + assistant fees ${fmtMoney(row.assistantFeesKES, 'KES')}` : ''}</p></div><div className="rounded-xl bg-black/[0.03] px-3 py-2 text-sm font-semibold">{fmtMoney(row.totalKES, 'KES')}</div></div>)}
+            {payrollRows.map(row => <div key={row.staffId} className="grid grid-cols-[1fr_auto] items-center gap-3 border-b border-black/5 pb-2"><div><p className="text-sm font-medium">{row.name}</p><p className="text-xs text-[#6E6E73]">{row.role} · {row.phone || 'No phone number'}{row.clients ? ` · ${row.clients} client${row.clients === 1 ? '' : 's'}` : ''}{row.commissionKES > 0 ? ` · commission ${fmtMoney(row.commissionKES, 'KES')}` : ''}{row.assistantFeesKES > 0 ? ` + assistant fees ${fmtMoney(row.assistantFeesKES, 'KES')}` : ''}{row.salaryKES > 0 ? ` · salary ${fmtMoney(row.salaryKES, 'KES')}` : ''}</p></div><div className="rounded-xl bg-black/[0.03] px-3 py-2 text-sm font-semibold">{fmtMoney(row.totalKES, 'KES')}</div></div>)}
             <div className="flex justify-between pt-2 text-sm font-semibold"><span>Total to pay</span><span>{fmtMoney(payrollTotal, 'KES')}</span></div>
           </div>
         )}
       </Card>
 
       <Card className="p-6">
-        <div className="flex items-center justify-between mb-4"><div><h2 className="font-semibold">Recorded payouts</h2><p className="text-xs text-[#6E6E73]">Marking paid restarts staff earnings from zero. It does not send money.</p></div></div>
+        <h2 className="font-semibold mb-1">Recent Paystack payroll transfers</h2>
+        <p className="text-xs text-[#6E6E73] mb-4">Transfers remain pending until Paystack sends a signed status webhook.</p>
+        {!payrollBatches.length ? <p className="text-sm text-[#6E6E73]">No Paystack payroll transfers yet.</p> : <div className="space-y-3">
+          {payrollBatches.slice(0, 5).map(batch => (
+            <div key={batch.id} className="border-b border-black/5 pb-3 last:border-0">
+              <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                <span>{batch.salaryMonth} · {batch.employeeCount} staff · {fmtMoney(batch.totalKES, 'KES')}</span>
+                <Badge tone={batch.status === 'success' ? 'success' : batch.status === 'failed' || batch.status === 'partial' ? 'warning' : 'info'}>{batch.status}</Badge>
+              </div>
+              <div className="mt-2 space-y-1">
+                {batch.transfers.map((transfer, index) => <p key={`${transfer.reference}-${index}`} className="text-xs text-[#6E6E73]">{transfer.staffName} · {fmtMoney(transfer.amountKES, 'KES')} · {transfer.status}{transfer.providerMessage ? ` · ${transfer.providerMessage}` : ''}</p>)}
+              </div>
+            </div>
+          ))}
+        </div>}
+      </Card>
+
+      <Card className="p-6">
+        <div className="flex items-center justify-between mb-4"><div><h2 className="font-semibold">Recorded payouts</h2><p className="text-xs text-[#6E6E73]">Manual payouts record commissions or salary as paid; they do not send money.</p></div></div>
         {payouts.length === 0 ? <p className="text-sm text-[#6E6E73]">No payout batches recorded yet.</p> : <div className="space-y-2">{payouts.slice(0, 5).map(payout => <div key={payout.id} className="flex items-center justify-between border-b border-black/5 pb-2 text-sm"><span className="capitalize">{payout.range} · {payout.employeeCount} employees</span><span className="font-medium">{fmtMoney(payout.totalKES, 'KES')} · recorded</span></div>)}</div>}
       </Card>
 

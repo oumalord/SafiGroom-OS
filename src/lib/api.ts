@@ -1,4 +1,4 @@
-import type { Staff, StaffPortalDashboard, ServiceItem, Customer, Appointment, QueueEntry, Product, Order, Expense, DashboardData, RebookingItem, ChatChannel, ChatMessage, Currency, MembershipPlan, Promotion, Review, AuditLog, Branch, PayoutBatch, PayrollRow, EarningEntry, EarningSummary } from '../types';
+import type { Staff, StaffPortalDashboard, ServiceItem, Customer, Appointment, QueueEntry, Product, Order, Expense, DashboardData, RebookingItem, ChatChannel, ChatMessage, Currency, MembershipPlan, Promotion, Review, AuditLog, Branch, PayoutBatch, PayrollRow, PayrollTransferBatch, EarningEntry, EarningSummary } from '../types';
 
 const api = {
   get: async (path: string) => ({ data: await request(path) }),
@@ -11,7 +11,7 @@ async function request(path: string, method = 'GET', body?: unknown): Promise<an
   const token = window.localStorage.getItem('safigroom_session');
   const branchId = window.localStorage.getItem('safigroom_selected_branch');
   const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), path.startsWith('/api/messages') ? 45000 : 15000);
+  const timeout = window.setTimeout(() => controller.abort(), path.startsWith('/api/messages') ? 45000 : path === '/api/payroll/send' ? 120000 : 15000);
   try {
     let response: Response;
     try {
@@ -158,7 +158,7 @@ export const ExpensesApi = {
 
 export const PayoutsApi = {
   list: () => api.get('/api/payouts').then(r => r.data.items as PayoutBatch[]),
-  record: (period: { from?: string; to?: string }) => api.post('/api/payouts', period).then(r => { invalidate('dashboard'); return r; }),
+  record: (period: { from?: string; to?: string; salaryMonth: string }) => api.post('/api/payouts', period).then(r => { invalidate('dashboard'); return r; }),
 };
 
 export const EarningsApi = {
@@ -168,8 +168,10 @@ export const EarningsApi = {
 
 export const PayrollApi = {
   staff: () => api.get('/api/payroll/staff').then(r => r.data.items as Staff[]),
-  commissions: (period: { from?: string; to?: string }) => api.get(`/api/payroll/commissions?${new URLSearchParams(Object.entries(period).filter(([, value]) => value) as [string, string][])}`).then(r => r.data as { rows: PayrollRow[]; totalKES: number }),
-  send: (period: { from?: string; to?: string }) => api.post('/api/payroll/send', period),
+  commissions: (period: { from?: string; to?: string; salaryMonth: string }) => api.get(`/api/payroll/commissions?${new URLSearchParams(Object.entries(period).filter(([, value]) => value) as [string, string][])}`).then(r => r.data as { rows: PayrollRow[]; totalKES: number }),
+  providerStatus: () => api.get('/api/payroll/provider-status').then(r => r.data as { provider: 'Paystack'; ready: boolean; environment: string }),
+  batches: () => api.get('/api/payroll/batches').then(r => r.data.items as PayrollTransferBatch[]),
+  send: (period: { from?: string; to?: string; salaryMonth: string }) => api.post('/api/payroll/send', period),
 };
 
 export const DashboardApi = {
