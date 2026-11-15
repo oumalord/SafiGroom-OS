@@ -7,6 +7,8 @@ const api = {
   delete: async (path: string) => ({ data: await request(path, 'DELETE') }),
 };
 
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '');
+
 async function request(path: string, method = 'GET', body?: unknown): Promise<any> {
   const token = window.localStorage.getItem('safigroom_session');
   const branchId = window.localStorage.getItem('safigroom_selected_branch');
@@ -15,7 +17,7 @@ async function request(path: string, method = 'GET', body?: unknown): Promise<an
   try {
     let response: Response;
     try {
-      response = await fetch(path, {
+      response = await fetch(`${API_BASE_URL}${path}`, {
         method,
         headers: { ...(body === undefined ? {} : { 'Content-Type': 'application/json' }), ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(branchId ? { 'X-Branch-ID': branchId } : {}) },
         body: body === undefined ? undefined : JSON.stringify(body),
