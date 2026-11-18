@@ -18,3 +18,7 @@ The Windows installer is unsigned, so Windows may show its standard unknown-publ
 - Android APK: install Android Studio and its Android SDK, then run `npm ci`, `npm run android:sync`, and `.\android\gradlew.bat assembleDebug`. The APK is written to `android\app\build\outputs\apk\debug\app-debug.apk`.
 
 The installable browser app is included in the standard Vite production build. It requires an HTTPS deployment for service-worker installation.
+
+## Set platform administrator credentials
+
+Set `DATABASE_URL` and `PLATFORM_ADMIN_EMAIL` in the local environment, then run `npm run db:set-platform-admin` from an interactive terminal. The command prompts for a new password without echoing it, updates or provisions the administrator account, and expires that account's existing sessions without deleting salon data. Use a unique password of at least 16 characters; do not put passwords in source files or commit them.
